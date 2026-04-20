@@ -1,6 +1,7 @@
 import { useState, useMemo, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useLiveSession } from "./useLiveSession";
+import SessionControl from "./SessionControl";
 
 /* ═══ CONSTANTS ═══ */
 const PIT_MARGIN = 5;            // seconds over best lap = pit/outlier
@@ -556,6 +557,7 @@ export default function App() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <SessionControl session={session} dark={dark} />
           {["Race", "Practice"].map((m) => (
             <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 56, height: 40, padding: "0 12px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
           ))}
