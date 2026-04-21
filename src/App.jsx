@@ -534,7 +534,7 @@ export default function App() {
   return (
     <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto" }}>
       {/* HEADER */}
-      <div style={{ padding: "10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", height: HH, boxSizing: "border-box", borderBottom: `1px solid ${bdr}`, background: bg, position: "sticky", top: 0, zIndex: 10 }}>
+      <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", borderBottom: `1px solid ${bdr}`, background: bg, position: "sticky", top: 0, zIndex: 10 }}>
         <div>
           <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>RACE ANALYTICS</div>
           <div style={{ fontSize: 10, color: sub }}>
