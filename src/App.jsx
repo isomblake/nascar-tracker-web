@@ -349,17 +349,17 @@ export default function App() {
           <div style={{ fontSize: 14, color: sub, marginBottom: 20 }}>
             {status === "connecting" && "Connecting to Supabase..."}
             {status === "loading" && "Loading session..."}
-            {status === "no_session" && "No active session found. Start race_tracker.py to begin tracking."}
+            {status === "no_session" && "No active session. Tap START below during a live NASCAR session."}
             {status === "error" && `Error: ${error}`}
             {status === "live" && "Waiting for lap data..."}
           </div>
           {session && (
             <div style={{ fontSize: 11, color: sub, marginTop: 12 }}>
-              Session: {session.track_name} · {session.session_type} · {session.session_date}
+              Last: {session.track_name} · {session.session_type} · {session.session_date}
             </div>
           )}
-          <button onClick={() => live.reload()} style={{ marginTop: 20, padding: "8px 20px", background: acc, color: "#fff", border: "none", borderRadius: 6, fontWeight: 600, cursor: "pointer" }}>Refresh</button>
         </div>
+        <SessionControl session={session} dark={dark} onAfterAction={live.reload} />
       </div>
     );
   }
