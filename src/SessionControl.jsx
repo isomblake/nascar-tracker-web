@@ -6,7 +6,6 @@
 // - Auto-refreshes on session table changes via realtime (handled by parent's useLiveSession)
 
 import { useState } from "react";
-import { supabase } from "./supabaseClient";
 
 const FN_BASE = `${process.env.REACT_APP_SUPABASE_URL}/functions/v1`;
 const ANON_KEY = process.env.REACT_APP_SUPABASE_ANON_KEY;
@@ -29,7 +28,6 @@ export default function SessionControl({ session, dark }) {
   const [toast, setToast] = useState(null);
 
   const bdr = dark ? "#1e1e3a" : "#e0e0e0";
-  const fg = dark ? "#e0e0e0" : "#1a1a1a";
 
   const isActive = session?.is_active === true;
 
