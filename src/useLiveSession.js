@@ -197,68 +197,103 @@ export function useLiveSession() {
   // Initial load
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Realtime: subscribe to laps and positions for the active session
+  // Polling (replaces realtime subscriptions to stay within free-tier limits).
+  // Polls every 3s for lap/position data when a session is active, and every
+  // 15s for session metadata regardless (so we catch new active sessions).
+  //
+  // Why polling instead of realtime: Supabase free tier is capped at 2M
+  // realtime messages/month. One race weekend with 37 drivers at 5s poll
+  // cadence blew through that. Polling is 3s visual latency (invisible) and
+  // costs only egress against a 5GB/month allowance (plenty of headroom).
   useEffect(() => {
-    if (!session?.id) return;
-    const sessId = session.id;
+    let cancelled = false;
 
-    const lapsChannel = supabase
-      .channel(`laps-${sessId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'laps', filter: `session_id=eq.${sessId}` },
-        (payload) => {
-          const row = payload.new || payload.old;
-          if (!row) return;
+    // Incremental lap/position poll — only for the active session
+    const pollActiveData = async () => {
+      if (!session?.id || cancelled) return;
+      const sessId = session.id;
+
+      try {
+        // Fetch only laps beyond the max we've seen (incremental)
+        const maxLap = rawLaps.length > 0
+          ? Math.max(...rawLaps.map((r) => r.lap_number))
+          : 0;
+
+        // Fetch new laps (paginated)
+        let newLaps = [];
+        let from = 0;
+        const PAGE = 1000;
+        while (!cancelled) {
+          const { data: chunk } = await supabase
+            .from('laps')
+            .select('driver_key, lap_number, lap_time')
+            .eq('session_id', sessId)
+            .gt('lap_number', maxLap)
+            .order('lap_number', { ascending: true })
+            .range(from, from + PAGE - 1);
+          if (!chunk || chunk.length === 0) break;
+          newLaps = newLaps.concat(chunk);
+          if (chunk.length < PAGE) break;
+          from += PAGE;
+        }
+        if (!cancelled && newLaps.length > 0) {
           setRawLaps((prev) => {
-            // Upsert by (driver_key, lap_number)
-            const filtered = prev.filter(
-              (r) => !(r.driver_key === row.driver_key && r.lap_number === row.lap_number)
-            );
-            if (payload.eventType === 'DELETE') return filtered;
-            return [...filtered, {
-              driver_key: row.driver_key,
-              lap_number: row.lap_number,
-              lap_time: row.lap_time,
-            }];
+            // Dedup by (driver_key, lap_number)
+            const seen = new Set(prev.map((r) => `${r.driver_key}:${r.lap_number}`));
+            const toAdd = newLaps.filter((r) => !seen.has(`${r.driver_key}:${r.lap_number}`));
+            return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
           });
         }
-      )
-      .subscribe();
 
-    const posChannel = supabase
-      .channel(`positions-${sessId}`)
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'positions', filter: `session_id=eq.${sessId}` },
-        (payload) => {
-          const row = payload.new || payload.old;
-          if (!row) return;
-          setRawPositions((prev) => {
-            const filtered = prev.filter((r) => r.driver_key !== row.driver_key);
-            if (payload.eventType === 'DELETE') return filtered;
-            return [...filtered, { driver_key: row.driver_key, position: row.position }];
-          });
+        // Positions: small table (one row per driver), just refetch it all
+        const { data: pos } = await supabase
+          .from('positions')
+          .select('driver_key, position')
+          .eq('session_id', sessId);
+        if (!cancelled && pos) setRawPositions(pos);
+
+        // Also refresh session row (for flag_state, current_lap, etc.)
+        const { data: sess } = await supabase
+          .from('sessions')
+          .select('*')
+          .eq('id', sessId)
+          .maybeSingle();
+        if (!cancelled && sess) setSession(sess);
+      } catch (e) {
+        console.warn('[useLiveSession] poll error', e);
+      }
+    };
+
+    // Session discovery poll — detects when active session changes or appears
+    const pollSessionDiscovery = async () => {
+      if (cancelled) return;
+      try {
+        const { data: sessions } = await supabase
+          .from('sessions')
+          .select('id, is_active')
+          .eq('is_active', true)
+          .limit(1);
+        const newActiveId = sessions?.[0]?.id ?? null;
+        const currentId = session?.id ?? null;
+        const currentActive = session?.is_active === true;
+        // Reload if: active session appeared, changed to different one, or went inactive
+        if (newActiveId !== currentId || (currentId && !currentActive && newActiveId)) {
+          if (!cancelled) loadAll();
         }
-      )
-      .subscribe();
+      } catch (e) {
+        console.warn('[useLiveSession] discovery error', e);
+      }
+    };
 
-    // Also watch for session changes (e.g. is_active flips on new session)
-    const sessionChannel = supabase
-      .channel('sessions-watch')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'sessions' },
-        () => { loadAll(); }
-      )
-      .subscribe();
+    const dataInterval = setInterval(pollActiveData, 3000);
+    const discoveryInterval = setInterval(pollSessionDiscovery, 15000);
 
     return () => {
-      supabase.removeChannel(lapsChannel);
-      supabase.removeChannel(posChannel);
-      supabase.removeChannel(sessionChannel);
+      cancelled = true;
+      clearInterval(dataInterval);
+      clearInterval(discoveryInterval);
     };
-  }, [session?.id, loadAll]);
+  }, [session?.id, session?.is_active, rawLaps, loadAll]);
 
 // ═══════════════════════════════════════════════════════════════════
 // Field-wide caution detection:
