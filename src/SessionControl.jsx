@@ -1,9 +1,12 @@
 // SessionControl.jsx
 //
-// Drop-in Start/Stop button for the Race Analytics header.
-// - If no active session: shows "START TRACKING" button; on tap, calls detect-session edge function
-// - If active session: shows "STOP" button; on tap, calls stop-session edge function
-// - Auto-refreshes on session table changes via realtime (handled by parent's useLiveSession)
+// Bottom-of-screen action bar for Start/Stop.
+// Fixed to bottom of viewport = thumb zone, clear of iPhone notch/Dynamic Island.
+// Respects iOS safe-area insets so it sits above the home indicator.
+//
+// - No active session: full-width green ▶ START TRACKING
+// - Active session: full-width red ■ STOP TRACKING
+// Toast rises above the bar.
 
 import { useState } from "react";
 
@@ -23,29 +26,31 @@ async function callFunction(name, body = {}) {
   return await r.json();
 }
 
-export default function SessionControl({ session, dark }) {
+export default function SessionControl({ session, dark, onAfterAction }) {
   const [loading, setLoading] = useState(false);
   const [toast, setToast] = useState(null);
 
-  const bdr = dark ? "#1e1e3a" : "#e0e0e0";
-
   const isActive = session?.is_active === true;
+
+  const showToast = (msg, ms = 3500) => {
+    setToast(msg);
+    setTimeout(() => setToast(null), ms);
+  };
 
   const handleStart = async () => {
     setLoading(true);
-    setToast(null);
     try {
       const res = await callFunction("detect-session");
       if (res.ok) {
-        setToast(`Found: ${res.detected.track} ${res.detected.session_type}`);
+        showToast(`✓ ${res.detected.track} · ${res.detected.session_type}`);
       } else {
-        setToast(res.message || res.reason || "No live session found");
+        showToast(res.message || res.reason || "No live session");
       }
+      if (onAfterAction) onAfterAction();
     } catch (err) {
-      setToast(`Error: ${err.message}`);
+      showToast(`Error: ${err.message}`);
     } finally {
       setLoading(false);
-      setTimeout(() => setToast(null), 4000);
     }
   };
 
@@ -55,81 +60,108 @@ export default function SessionControl({ session, dark }) {
     setLoading(true);
     try {
       await callFunction("stop-session");
-      setToast("Stopped.");
+      showToast("Stopped");
+      if (onAfterAction) onAfterAction();
     } catch (err) {
-      setToast(`Error: ${err.message}`);
+      showToast(`Error: ${err.message}`);
     } finally {
       setLoading(false);
-      setTimeout(() => setToast(null), 3000);
     }
   };
 
-  const btnBase = {
-    height: 40,
-    padding: "0 10px",
-    borderRadius: 6,
-    border: `1px solid ${bdr}`,
-    fontSize: 11,
-    fontWeight: 700,
-    letterSpacing: "0.5px",
-    cursor: loading ? "wait" : "pointer",
-    opacity: loading ? 0.6 : 1,
-  };
+  const barHeight = 56;
+  const bg = dark ? "#08081a" : "#ffffff";
+  const bdr = dark ? "#1e1e3a" : "#e0e0e0";
 
   return (
     <>
-      {isActive ? (
-        <button
-          onClick={handleStop}
-          disabled={loading}
-          title="Stop tracking"
-          style={{
-            ...btnBase,
-            background: "transparent",
-            color: "#ef4444",
-            borderColor: "#ef4444",
-          }}
-        >
-          ⏹ STOP
-        </button>
-      ) : (
-        <button
-          onClick={handleStart}
-          disabled={loading}
-          title="Auto-detect and start tracking current NASCAR session"
-          style={{
-            ...btnBase,
-            background: "#22c55e",
-            color: "#000",
-            borderColor: "#22c55e",
-          }}
-        >
-          {loading ? "…" : "▶ START"}
-        </button>
-      )}
+      {/* Spacer so page content isn't hidden under the fixed bar */}
+      <div
+        aria-hidden="true"
+        style={{
+          height: `calc(${barHeight}px + env(safe-area-inset-bottom, 0px) + 12px)`,
+        }}
+      />
+
+      {/* Toast — above the bar */}
       {toast && (
         <div
           style={{
             position: "fixed",
-            bottom: 20,
             left: "50%",
+            bottom: `calc(${barHeight + 20}px + env(safe-area-inset-bottom, 0px))`,
             transform: "translateX(-50%)",
             background: dark ? "#0d0d2a" : "#1a1a2a",
             color: "#e0e0e0",
             padding: "10px 16px",
             borderRadius: 8,
-            fontSize: 12,
+            fontSize: 13,
             fontWeight: 600,
             border: `1px solid ${bdr}`,
-            zIndex: 1000,
+            zIndex: 1001,
             boxShadow: "0 4px 12px rgba(0,0,0,0.4)",
-            maxWidth: "80%",
+            maxWidth: "80vw",
             textAlign: "center",
+            pointerEvents: "none",
           }}
         >
           {toast}
         </div>
       )}
+
+      {/* Bottom action bar */}
+      <div
+        style={{
+          position: "fixed",
+          left: 0,
+          right: 0,
+          bottom: 0,
+          padding: `6px 12px calc(6px + env(safe-area-inset-bottom, 0px)) 12px`,
+          background: bg,
+          borderTop: `1px solid ${bdr}`,
+          zIndex: 1000,
+          boxShadow: "0 -2px 10px rgba(0,0,0,0.25)",
+        }}
+      >
+        <button
+          onClick={isActive ? handleStop : handleStart}
+          disabled={loading}
+          aria-label={isActive ? "Stop tracking" : "Start tracking"}
+          style={{
+            width: "100%",
+            height: barHeight,
+            borderRadius: 10,
+            border: "none",
+            fontSize: 15,
+            fontWeight: 800,
+            letterSpacing: "0.8px",
+            cursor: loading ? "wait" : "pointer",
+            opacity: loading ? 0.7 : 1,
+            background: isActive ? "#ef4444" : "#22c55e",
+            color: isActive ? "#fff" : "#000",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            WebkitTapHighlightColor: "transparent",
+            touchAction: "manipulation",
+          }}
+        >
+          {loading ? (
+            "…"
+          ) : isActive ? (
+            <>
+              <span style={{ fontSize: 14 }}>■</span>
+              <span>STOP TRACKING</span>
+            </>
+          ) : (
+            <>
+              <span style={{ fontSize: 14 }}>▶</span>
+              <span>START TRACKING</span>
+            </>
+          )}
+        </button>
+      </div>
     </>
   );
 }
