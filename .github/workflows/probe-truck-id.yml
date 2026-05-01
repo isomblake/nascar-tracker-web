@@ -8,13 +8,20 @@ on:
       - '.github/workflows/probe-truck-id.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   probe:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Scan series_3 IDs 1-6000 for live session
         run: |
-          python3 - <<'PYEOF'
+          python3 - <<'PYEOF' | tee probe_results.txt
           import json, sys
           from concurrent.futures import ThreadPoolExecutor, as_completed
           import urllib.request
@@ -36,17 +43,27 @@ jobs:
               for fut in as_completed(futures):
                   result = fut.result()
                   if result and result[3] is not None:
-                      race_id, track, run_name, fs, run_type = result
                       hits.append(result)
-                      print(f"HIT  series_3 id={race_id:5d}  flag={fs}  type={run_type}  track={track}  run={run_name}")
-                      sys.stdout.flush()
 
-          print("\n=== SUMMARY ===")
           live = [h for h in hits if h[3] in [1, 2, 8]]
+          all_hits = sorted(hits, key=lambda x: x[0])
+
+          print("=== LIVE SESSIONS ===")
           if live:
               for h in sorted(live, key=lambda x: x[0]):
-                  print(f"LIVE series_3 id={h[0]}  flag={h[3]}  track={h[1]}  run={h[2]}")
+                  print(f"LIVE series_3 id={h[0]}  flag={h[3]}  type={h[4]}  track={h[1]}  run={h[2]}")
           else:
-              print("No live series_3 session found in range 1-6000")
-          print(f"Total hits (any data): {len(hits)}")
+              print("No live series_3 session in range 1-6000")
+
+          print(f"\n=== ALL HITS ({len(all_hits)} total IDs with data) ===")
+          for h in all_hits[-20:]:
+              print(f"  id={h[0]}  flag={h[3]}  type={h[4]}  track={h[1]}")
           PYEOF
+
+      - name: Commit results
+        run: |
+          git config user.email "probe-bot@nascar-tracker"
+          git config user.name "Probe Bot"
+          git add probe_results.txt
+          git commit -m "probe: series_3 ID scan results" || echo "nothing to commit"
+          git push origin claude/fix-jwt-auth-8dJNd
