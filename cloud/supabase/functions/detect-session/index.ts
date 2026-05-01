@@ -1,9 +1,11 @@
 // supabase/functions/detect-session/index.ts
 //
 // Called by the PWA when Blake hits "Start Tracking".
-// Scans NASCAR race IDs in a window, finds the one that's live today,
-// creates a sessions row with is_active=true, and returns it.
+// Scans NASCAR race IDs in a window across all three series, finds the one
+// that's live right now, creates a sessions row with is_active=true, and
+// returns it.
 //
+// Series priority when multiple are simultaneously live: Cup (1) > Xfinity (2) > Truck (3).
 // The poll-nascar cron will see is_active=true on its next tick and start polling.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
@@ -15,17 +17,24 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Scan window. Kansas was 5607. Talladega will be ~5608, Texas ~5609. Pad generously.
+// Scan window. Kansas Cup was 5607. Race IDs appear globally sequential across
+// all series in 2026, so the same window covers Cup, Xfinity, and Truck.
+// Widen SCAN_END if detect-session ever returns no_live_session during a known
+// live event — see cloud/ROLLBACK.md Decision 4.
 const SCAN_START = 5605;
-const SCAN_END = 5640;
-const SERIES = 1; // Cup
+const SCAN_END = 5660;
+
+const ALL_SERIES = [
+  { id: 1, name: "Cup" },
+  { id: 2, name: "Xfinity" },
+  { id: 3, name: "Truck" },
+];
 
 // NASCAR run_type → our session_type convention
 function mapRunType(runType: number, runName: string): string {
   if (runType === 3) return "race";
   if (runType === 4) return "qualifying";
   if (runType === 1 || runType === 2) {
-    // Practice 1 vs 2 distinguished by run_name
     const n = (runName || "").toLowerCase();
     if (n.includes("2") || n.includes("group 2") || n.includes("final")) return "practice2";
     return "practice1";
@@ -33,14 +42,13 @@ function mapRunType(runType: number, runName: string): string {
   return "unknown";
 }
 
-// Flag state meaning:
-// 1 = green, 2 = yellow, 3 = red, 4 = checkered, 8 = warmup/pre-race, 9 = cold/not started
+// Flag state: 1=green, 2=yellow, 3=red, 4=checkered, 8=warmup/pre-race, 9=cold
 function isLive(flagState: number): boolean {
   return flagState === 1 || flagState === 2 || flagState === 8;
 }
 
-async function fetchLiveFeed(raceId: number): Promise<any | null> {
-  const url = `https://cf.nascar.com/cacher/live/series_${SERIES}/${raceId}/live-feed.json`;
+async function fetchLiveFeed(seriesId: number, raceId: number): Promise<any | null> {
+  const url = `https://cf.nascar.com/cacher/live/series_${seriesId}/${raceId}/live-feed.json`;
   try {
     const r = await fetch(url, { signal: AbortSignal.timeout(3000) });
     if (!r.ok) return null;
@@ -59,12 +67,19 @@ serve(async (req) => {
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // Scan all IDs in parallel
+    // Scan all (series, raceId) combinations in parallel
     const ids: number[] = [];
     for (let i = SCAN_START; i <= SCAN_END; i++) ids.push(i);
 
     const results = await Promise.all(
-      ids.map(async (id) => ({ id, feed: await fetchLiveFeed(id) }))
+      ALL_SERIES.flatMap(({ id: seriesId, name: seriesName }) =>
+        ids.map(async (id) => ({
+          id,
+          seriesId,
+          seriesName,
+          feed: await fetchLiveFeed(seriesId, id),
+        }))
+      )
     );
 
     // Filter to live sessions
@@ -74,6 +89,8 @@ serve(async (req) => {
       .filter((r) => isLive(r.feed.flag_state))
       .map((r) => ({
         raceId: r.id,
+        seriesId: r.seriesId,
+        seriesName: r.seriesName,
         trackName: r.feed.track_name || "unknown",
         runType: r.feed.run_type,
         runName: r.feed.run_name || "",
@@ -88,18 +105,19 @@ serve(async (req) => {
           ok: false,
           reason: "no_live_session",
           message: "No live NASCAR session detected. Check back closer to session start.",
-          scanned: ids.length,
+          scanned: ids.length * ALL_SERIES.length,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Prefer green (1), then yellow (2), then warmup (8)
-    candidates.sort((a, b) => a.flagState - b.flagState);
+    // Primary sort: green (1) > yellow (2) > warmup (8).
+    // Tiebreak: Cup (1) > Xfinity (2) > Truck (3) — series id ascending.
+    candidates.sort((a, b) => a.flagState - b.flagState || a.seriesId - b.seriesId);
     const pick = candidates[0];
 
     const sessionType = mapRunType(pick.runType, pick.runName);
-    const pollUrl = `https://cf.nascar.com/cacher/live/series_${SERIES}/${pick.raceId}/lap-times.json`;
+    const pollUrl = `https://cf.nascar.com/cacher/live/series_${pick.seriesId}/${pick.raceId}/lap-times.json`;
 
     // Deactivate any existing active sessions first (prevents double-polling)
     await supabase.from("sessions").update({ is_active: false }).eq("is_active", true);
@@ -145,7 +163,7 @@ serve(async (req) => {
           laps_in_race: pick.lapsInRace ?? null,
           current_lap: pick.lapNumber ?? null,
           started_by: "phone",
-          series: SERIES,
+          series: pick.seriesId,
         })
         .select()
         .single();
@@ -174,6 +192,8 @@ serve(async (req) => {
           session_type: sessionType,
           run_name: pick.runName,
           flag_state: pick.flagState,
+          series: pick.seriesId,
+          series_name: pick.seriesName,
           candidates_found: candidates.length,
         },
       }),

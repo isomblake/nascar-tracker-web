@@ -42,7 +42,8 @@ export default function SessionControl({ session, dark, onAfterAction }) {
     try {
       const res = await callFunction("detect-session");
       if (res.ok) {
-        showToast(`✓ ${res.detected.track} · ${res.detected.session_type}`);
+        const seriesLabel = res.detected.series_name ? `${res.detected.series_name} ` : "";
+        showToast(`✓ ${res.detected.track} · ${seriesLabel}${res.detected.session_type}`);
       } else {
         showToast(res.message || res.reason || "No live session");
       }
