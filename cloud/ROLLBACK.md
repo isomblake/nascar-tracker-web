@@ -5,6 +5,29 @@ is documented here with the exact commands to flip it.
 
 ---
 
+## Decision 5: Edge function JWT verification — disabled
+
+**Current:** All three edge functions (`detect-session`, `poll-nascar`, `stop-session`) have
+"Verify JWT with legacy secret" **OFF**.
+
+**Why:** The Vercel env var `REACT_APP_SUPABASE_ANON_KEY` holds the new publishable key format
+(`sb_publishable_*`), which is not a JWT. With verification on, every START tap returned
+"Invalid JWT". The functions have no user identity to verify anyway — they use the service_role
+key internally and are called by either pg_cron or the public PWA.
+
+**To re-enable** (only needed if you switch to a legacy `eyJ*` anon key):
+1. Dashboard → Functions → each function → Settings → toggle "Verify JWT with legacy secret" ON
+2. Or via Management API:
+   ```bash
+   curl -X PATCH "https://api.supabase.com/v1/projects/ofqqgbgxoywnqoukvwth/functions/<slug>" \
+     -H "Authorization: Bearer <sbp_PAT>" \
+     -H "Content-Type: application/json" \
+     -d '{"verify_jwt": true}'
+   ```
+   Repeat for detect-session, poll-nascar, stop-session.
+
+---
+
 ## Decision 1: Polling vs Realtime
 
 **Current:** PWA polls Supabase every 3s for lap/position data, every 15s for session discovery.
