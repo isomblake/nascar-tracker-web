@@ -114,8 +114,9 @@ serve(async (req) => {
     }
 
     // Primary sort: green (1) > yellow (2) > warmup (8).
-    // Tiebreak: Cup (1) > Xfinity (2) > Truck (3) — series id ascending.
-    candidates.sort((a, b) => a.flagState - b.flagState || a.seriesId - b.seriesId);
+    // Tiebreak 1: Cup (1) > Xfinity (2) > Truck (3) — series id ascending.
+    // Tiebreak 2: higher race_id = newer event (avoids stale CDN cache for ended sessions).
+    candidates.sort((a, b) => a.flagState - b.flagState || a.seriesId - b.seriesId || b.raceId - a.raceId);
     const pick = candidates[0];
 
     const sessionType = mapRunType(pick.runType, pick.runName);
