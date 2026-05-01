@@ -212,11 +212,14 @@ serve(async (req) => {
         break;
       }
 
-      // Auto-stop when session goes cold after data has been seen (practice/qualifying end)
-      // FLAG_COLD (9) means the session has ended; only stop if we actually collected laps
-      // so we don't kill a session that just hasn't started yet.
+      // Auto-stop when session goes cold (practice/qualifying ended, or stale session).
+      // Two conditions cover both cases:
+      //   totalSeen > 0 — session ran normally and data stopped coming in
+      //   polls >= 2    — stale/empty session that was never live (no-data guard)
+      // detect-session only creates sessions in live states (flag 1/2/8), so seeing
+      // FLAG_COLD for 2+ polls means the session is genuinely over.
       const totalSeen = (session.total_laps_seen ?? 0) + totalNewLaps;
-      if (liveData?.flag_state === FLAG_COLD && totalSeen > 0) {
+      if (liveData?.flag_state === FLAG_COLD && (totalSeen > 0 || polls >= 2)) {
         await supabase
           .from("sessions")
           .update({ is_active: false, flag_state: FLAG_COLD })
