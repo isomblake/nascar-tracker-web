@@ -1,0 +1,24 @@
+=== LIVE SESSIONS ===
+LIVE series_3 id=5674  flag=1  type=1  track=Texas Motor Speedway  run=NCTS Final Practice
+
+=== ALL HITS (214 total IDs with data) ===
+  id=5497  flag=9  type=3  track=Nashville Superspeedway
+  id=5498  flag=9  type=3  track=Pocono Raceway
+  id=5499  flag=9  type=3  track=Indianapolis Raceway Park
+  id=5500  flag=9  type=3  track=Richmond Raceway
+  id=5501  flag=9  type=3  track=Michigan Int'l Speedway
+  id=5502  flag=9  type=3  track=Bristol Motor Speedway
+  id=5503  flag=9  type=3  track=Watkins Glen International
+  id=5504  flag=9  type=3  track=Talladega Superspeedway
+  id=5505  flag=9  type=3  track=Charlotte Motor Speedway RC
+  id=5506  flag=9  type=3  track=Martinsville Speedway
+  id=5507  flag=9  type=3  track=Phoenix Raceway
+  id=5508  flag=9  type=3  track=New Hampshire Motor Speedway
+  id=5509  flag=9  type=3  track=Lime Rock Park
+  id=5667  flag=9  type=3  track=Daytona International Speedway
+  id=5668  flag=9  type=3  track=EchoPark Speedway
+  id=5669  flag=9  type=3  track=St. Petersburg Street Course
+  id=5672  flag=9  type=3  track=Bristol Motor Speedway
+  id=5673  flag=9  type=3  track=Rockingham Speedway
+  id=5674  flag=1  type=1  track=Texas Motor Speedway
+  id=5685  flag=9  type=3  track=Darlington Raceway
