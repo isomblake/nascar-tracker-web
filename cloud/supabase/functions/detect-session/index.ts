@@ -17,12 +17,14 @@ const corsHeaders = {
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-// Scan window. Kansas Cup was 5607. Race IDs appear globally sequential across
-// all series in 2026, so the same window covers Cup, Xfinity, and Truck.
-// Widen SCAN_END if detect-session ever returns no_live_session during a known
-// live event — see cloud/ROLLBACK.md Decision 4.
+// Scan window — covers all three series in 2026:
+//   Cup:     ~5607-5640
+//   Xfinity: ~5640-5680 (estimated)
+//   Truck:    5667-5690+ (confirmed: Texas practice 5674, season started ~5667)
+// Widen SCAN_END if detect-session returns no_live_session during a known live
+// event — see cloud/ROLLBACK.md Decision 4.
 const SCAN_START = 5605;
-const SCAN_END = 5660;
+const SCAN_END = 5720;
 
 const ALL_SERIES = [
   { id: 1, name: "Cup" },
