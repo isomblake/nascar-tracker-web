@@ -18,8 +18,8 @@ const POLL_INTERVAL_MS = 5000;
 const MAX_RUNTIME_MS = 55_000; // leave headroom before 60s cron tick
 
 // NASCAR flag states
-const FLAG_CHECKERED = 4;
-const FLAG_COLD = 9;
+const FLAG_CHECKERED = 4; // race over
+const FLAG_COLD = 9;      // session not started / ended (practice, qualifying end)
 
 interface Session {
   id: number;
@@ -208,6 +208,18 @@ serve(async (req) => {
         await supabase
           .from("sessions")
           .update({ is_active: false, flag_state: FLAG_CHECKERED })
+          .eq("id", session.id);
+        break;
+      }
+
+      // Auto-stop when session goes cold after data has been seen (practice/qualifying end)
+      // FLAG_COLD (9) means the session has ended; only stop if we actually collected laps
+      // so we don't kill a session that just hasn't started yet.
+      const totalSeen = (session.total_laps_seen ?? 0) + totalNewLaps;
+      if (liveData?.flag_state === FLAG_COLD && totalSeen > 0) {
+        await supabase
+          .from("sessions")
+          .update({ is_active: false, flag_state: FLAG_COLD })
           .eq("id", session.id);
         break;
       }
