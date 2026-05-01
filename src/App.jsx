@@ -1,7 +1,20 @@
 import { useState, useMemo, useCallback } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useLiveSession } from "./useLiveSession";
+import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
+
+/* ═══ HISTORY FETCH ═══ */
+async function fetchHistory(trackName, series = 1, forceRefresh = false) {
+  const base = process.env.REACT_APP_SUPABASE_URL;
+  const key  = process.env.REACT_APP_SUPABASE_ANON_KEY;
+  const r = await fetch(`${base}/functions/v1/fetch-history`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${key}`, apikey: key, "Content-Type": "application/json" },
+    body: JSON.stringify({ track_name: trackName, series, force_refresh: forceRefresh }),
+  });
+  return r.json();
+}
 
 /* ═══ CONSTANTS ═══ */
 const PIT_MARGIN = 5;            // seconds over best lap = pit/outlier
@@ -274,6 +287,12 @@ export default function App() {
 
   const [dark, setDark] = useState(true);
   const [mode, setMode] = useState("race");
+
+  // ── History state ──────────────────────────────────────────────
+  const [historySessionId, setHistorySessionId] = useState(null);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState(null);
+  const hist = useHistorySession(historySessionId);
   const [tab, setTab] = useState(0);
   const [primary, setPrimary] = useState("Brad Keselowski");
   const [compDrivers, setCompDrivers] = useState([]);
@@ -557,8 +576,8 @@ export default function App() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {["Race", "Practice"].map((m) => (
-            <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 56, height: 40, padding: "0 12px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
+          {["Race", "Practice", "History"].map((m) => (
+            <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 52, height: 40, padding: "0 10px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
           ))}
           <button onClick={() => setDark(!dark)} aria-label="Toggle theme" style={{ width: 40, height: 40, borderRadius: 6, background: "transparent", border: `1px solid ${bdr}`, color: fg, cursor: "pointer", fontSize: 16 }}>{dark ? "☀" : "☾"}</button>
           <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 40, height: 40, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
@@ -857,6 +876,182 @@ export default function App() {
           )}
         </>
       )}
+      {/* ═══ HISTORY ═══ */}
+      {mode === "history" && (() => {
+        const trackName = session?.track_name;
+        const seriesNum = session?.series ?? 1;
+
+        const handleLoad = async (forceRefresh = false) => {
+          if (!trackName) return;
+          setHistoryLoading(true);
+          setHistoryError(null);
+          try {
+            const res = await fetchHistory(trackName, seriesNum, forceRefresh);
+            if (res.ok && res.sessions && res.sessions.length > 0) {
+              setHistorySessionId(res.sessions[0].id);
+            } else {
+              setHistoryError(res.message || res.error || "No history found.");
+            }
+          } catch (e) {
+            setHistoryError(e.message || "Fetch failed.");
+          } finally {
+            setHistoryLoading(false);
+          }
+        };
+
+        // Banner shown above the data regardless of state
+        const HistBanner = () => (
+          <div style={{ padding: "8px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${bdr}` }}>
+            <div>
+              <div style={{ fontSize: 11, fontWeight: 700, color: acc }}>
+                {hist.session
+                  ? `${hist.session.track_name} · ${hist.session.session_type.toUpperCase()} · ${hist.session.session_date}`
+                  : `Previous ${trackName || "track"} race`}
+              </div>
+              <div style={{ fontSize: 9, color: sub, marginTop: 1 }}>
+                {hist.session ? `Race ID ${hist.session.race_id}` : "Historical lap data"}
+              </div>
+            </div>
+            <button
+              onClick={() => handleLoad(true)}
+              disabled={historyLoading}
+              style={{ padding: "4px 10px", fontSize: 10, fontWeight: 600, borderRadius: 4, border: `1px solid ${bdr}`, background: "transparent", color: sub, cursor: historyLoading ? "wait" : "pointer" }}
+            >
+              {historyLoading ? "…" : "↺ Refresh"}
+            </button>
+          </div>
+        );
+
+        // Nothing loaded yet
+        if (!historySessionId && !historyLoading) {
+          return (
+            <div style={{ padding: 20 }}>
+              <HistBanner />
+              <div style={{ marginTop: 24, textAlign: "center" }}>
+                {!trackName ? (
+                  <div style={{ color: sub, fontSize: 13 }}>
+                    Start a live session first — history loads for that track.
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ color: sub, fontSize: 13, marginBottom: 16 }}>
+                      Load previous race data for <strong style={{ color: fg }}>{trackName}</strong>
+                    </div>
+                    <button
+                      onClick={() => handleLoad(false)}
+                      style={{ padding: "12px 28px", borderRadius: 8, background: acc, color: "#fff", border: "none", fontSize: 14, fontWeight: 700, cursor: "pointer" }}
+                    >
+                      Load History
+                    </button>
+                    {historyError && (
+                      <div style={{ marginTop: 12, color: "#ef4444", fontSize: 12 }}>{historyError}</div>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          );
+        }
+
+        if (historyLoading || hist.status === "loading") {
+          return (
+            <div style={{ padding: 20 }}>
+              <HistBanner />
+              <div style={{ textAlign: "center", color: sub, marginTop: 32, fontSize: 13 }}>Loading history…</div>
+            </div>
+          );
+        }
+
+        if (hist.status === "error") {
+          return (
+            <div style={{ padding: 20 }}>
+              <HistBanner />
+              <div style={{ textAlign: "center", color: "#ef4444", marginTop: 24, fontSize: 13 }}>
+                Failed to load historical data.
+                <br />
+                <button onClick={() => handleLoad(false)} style={{ marginTop: 12, padding: "6px 16px", borderRadius: 6, background: acc, color: "#fff", border: "none", fontSize: 12, cursor: "pointer" }}>Retry</button>
+              </div>
+            </div>
+          );
+        }
+
+        if (hist.status !== "loaded" || hist.NAMES.length === 0) {
+          return (
+            <div style={{ padding: 20 }}>
+              <HistBanner />
+              <div style={{ textAlign: "center", color: sub, marginTop: 32, fontSize: 13 }}>No lap data in this historical session.</div>
+            </div>
+          );
+        }
+
+        // Data loaded — render using the same analytics components
+        return (
+          <div>
+            <HistBanner />
+            <div style={{ padding: "0 12px", marginTop: 10 }}>
+              <div style={{ background: dark ? acc + "10" : acc + "08", border: `1px solid ${acc}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: acc }}>
+                    ★ #{hist.NUM[primary] || hist.NUM[hist.NAMES[0]] || "?"} {hist.BEST[primary] ? primary : hist.NAMES[0]}
+                  </div>
+                  <div style={{ fontSize: 10, color: sub }}>
+                    {(hist.BEST[primary] || hist.BEST[hist.NAMES[0]])?.tl || 0} laps tracked
+                  </div>
+                </div>
+                <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>BEST WINDOW</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                  {["t5","t10","t15","t20","t25","t30"].map((k) => {
+                    const dName = hist.BEST[primary] ? primary : hist.NAMES[0];
+                    const v = hist.BEST[dName]?.[k];
+                    return (
+                      <StatCell key={k} label={k.replace("t","")+"L"} value={v} dark={dark} />
+                    );
+                  })}
+                </div>
+              </div>
+
+              <RankTable
+                title="RACE BEST WINDOW"
+                dataset={hist.BEST}
+                primary={hist.BEST[primary] ? primary : hist.NAMES[0]}
+                group={0}
+                compDrivers={[]}
+                dark={dark}
+                extraW={null}
+                NAMES={hist.NAMES}
+                GROUPS={hist.GROUPS}
+                NUM={hist.NUM}
+                BEST={hist.BEST}
+              />
+
+              <RankTable
+                title="WORN TIRE SPEED (End of Longest Run)"
+                dataset={hist.EOR}
+                primary={hist.BEST[primary] ? primary : hist.NAMES[0]}
+                group={0}
+                compDrivers={[]}
+                dark={dark}
+                extraW={null}
+                NAMES={hist.NAMES}
+                GROUPS={hist.GROUPS}
+                NUM={hist.NUM}
+                BEST={hist.BEST}
+                showRunLength
+              />
+
+              <FalloffCard
+                primary={hist.BEST[primary] ? primary : hist.NAMES[0]}
+                compDrivers={[]}
+                dark={dark}
+                BEST={hist.BEST}
+                EOR={hist.EOR}
+                NUM={hist.NUM}
+              />
+            </div>
+          </div>
+        );
+      })()}
+
       <SessionControl session={session} dark={dark} onAfterAction={live.reload} />
     </div>
   );

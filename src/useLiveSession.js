@@ -133,10 +133,12 @@ export function useLiveSession() {
       if (sErr) throw sErr;
 
       if (!sessions || sessions.length === 0) {
-        // No active session — fall back to most recent any-session
+        // No active session — fall back to most recent live-originated session
+        // (exclude historical imports so they don't hijack the header display)
         const { data: recent } = await supabase
           .from('sessions')
           .select('*')
+          .neq('started_by', 'historical')
           .order('started_at', { ascending: false })
           .limit(1);
         if (!recent || recent.length === 0) {

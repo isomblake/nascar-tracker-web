@@ -39,3 +39,8 @@ jobs:
         run: supabase functions deploy stop-session --project-ref ofqqgbgxoywnqoukvwth --no-verify-jwt
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PAT }}
+
+      - name: Deploy fetch-history
+        run: supabase functions deploy fetch-history --project-ref ofqqgbgxoywnqoukvwth --no-verify-jwt
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_PAT }}
