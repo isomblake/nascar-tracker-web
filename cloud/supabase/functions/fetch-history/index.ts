@@ -5,9 +5,10 @@
 // lap-times.json, and stores everything in the DB tagged started_by='historical'.
 //
 // Discovery strategy:
-//   1. Try NASCAR schedule API (fast, but often unavailable mid-season)
-//   2. Fallback: scan live-feed.json backwards from current session's race_id,
-//      looking for flag_state=4 (checkered) + track name match
+//   1. Try NASCAR schedule API (fast when available)
+//   2. Fallback: scan live-feed.json backwards from a reference race_id,
+//      looking for run_type=3 + track name match + raceDate < today.
+//      BATCH=60 keeps total wall-clock time under ~14s (safe for Supabase).
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -71,11 +72,10 @@ async function fetchSchedule(year: number, series: number): Promise<ReturnType<t
   return [];
 }
 
-// Scan live-feed.json backwards from startId looking for a completed race
-// at the given track. Returns found candidates sorted newest-first.
-// No flag_state filter — the CDN often serves stale values for old IDs.
-// Date filter (raceDate < today) prevents picking up the live event.
-// Large batch size (60) keeps total wall-clock time under ~14s.
+// Scan live-feed.json backwards from a reference race_id.
+// BATCH=60 + timeout=2000ms → ~7 sequential rounds × 2s = ~14s total.
+// No flag_state filter — CDN often serves stale values for old IDs.
+// Date filter prevents picking up the currently-running event.
 async function scanBackwardsForRace(
   series: number,
   trackKeyword: string,
@@ -98,7 +98,6 @@ async function scanBackwardsForRace(
           2000
         );
         if (!feed) return null;
-        // Handle both camelCase and PascalCase CDN field names
         const trackName = String(feed.track_name ?? feed.TrackName ?? "");
         if (!trackName.toLowerCase().includes(trackKeyword)) return null;
         const runType = parseInt(String(feed.run_type ?? feed.RunType ?? 3), 10);
@@ -175,10 +174,8 @@ serve(async (req) => {
       }
     }
 
-    // ── Strategy 2: scan backwards from current session race_id ─
+    // ── Strategy 2: scan backwards from a reference race_id ─────
     if (candidates.length === 0) {
-      // Try any recent session (not just non-historical) to get a reference ID.
-      // Fall back to SCAN_END (5720) if the DB has nothing yet.
       const { data: recentSessions } = await supabase
         .from("sessions")
         .select("race_id")
@@ -211,7 +208,6 @@ serve(async (req) => {
     for (const race of candidates.slice(0, 5)) {
       const lapUrl = `https://cf.nascar.com/cacher/live/series_${series}/${race.raceId}/lap-times.json`;
       const data = await fetchJson(lapUrl);
-      // Handle both laps (Cup) and Laps (Truck/Xfinity) variants
       const arr = data?.laps ?? data?.Laps;
       if (data && Array.isArray(arr) && arr.length > 0) {
         lapData = data;

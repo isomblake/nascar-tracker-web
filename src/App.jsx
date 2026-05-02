@@ -552,7 +552,7 @@ export default function App() {
 
   return (
     <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto", overflowX: "hidden" }}>
-      {/* HEADER — title + two icon buttons only, no overflow */}
+      {/* HEADER — title row only; no mode buttons to prevent horizontal overflow */}
       <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", background: bg, position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>RACE ANALYTICS</div>
@@ -581,7 +581,7 @@ export default function App() {
         </div>
       </div>
 
-      {/* MODE TABS — full-width, no overflow possible */}
+      {/* MODE TABS — full-width sticky bar, no overflow possible */}
       <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, background: bg, position: "sticky", top: HH, zIndex: 10 }}>
         {["Race", "Practice", "History"].map((m) => (
           <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ flex: 1, padding: "10px", background: "transparent", color: mode === m.toLowerCase() ? acc : sub, border: "none", borderBottom: mode === m.toLowerCase() ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: MTH }}>{m}</button>
