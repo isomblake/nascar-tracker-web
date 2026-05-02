@@ -43,93 +43,91 @@ async function fetchJson(url: string): Promise<any | null> {
 
 // Parse NASCAR lap-times.json payload and upsert new laps/positions.
 // Returns number of new laps written.
+// Handles both PascalCase (Cup) and camelCase/snake_case (Truck/Xfinity) CDN variants.
 async function processLapTimes(
   supabase: SupabaseClient,
   session: Session,
   lapData: any,
   liveData: any
 ): Promise<number> {
-  // lap-times.json structure:
-  // { laps: [ { Number: 6, FullName: "Brad Keselowski", NASCARDriverID: ..., Laps: [ { Lap, LapTime, RunningPos, ... } ] } ] }
-  const driversArr = lapData?.laps ?? [];
-  if (!Array.isArray(driversArr) || driversArr.length === 0) return 0;
+  // lap-times.json top-level key varies by series: "laps" (Cup) or "Laps" (Truck/Xfinity)
+  const driversArr = lapData?.laps ?? lapData?.Laps ?? [];
 
-  // Build driver upsert rows (only on first sight per session; we skip if already seen)
-  const driverRows: any[] = [];
-  const lapRows: any[] = [];
-  const positionMap = new Map<string, number>();
+  let newLaps = 0;
 
-  for (const d of driversArr) {
-    const driverKey = String(d.NASCARDriverID ?? d.Number ?? "");
-    if (!driverKey) continue;
-    const carNumber = String(d.Number ?? "");
-    const fullName = d.FullName ?? "";
-    const lastName = fullName.split(" ").slice(-1)[0] ?? "";
+  if (Array.isArray(driversArr) && driversArr.length > 0) {
+    const driverRows: any[] = [];
+    const lapRows: any[] = [];
+    const positionMap = new Map<string, number>();
 
-    driverRows.push({
-      session_id: session.id,
-      driver_key: driverKey,
-      car_number: carNumber,
-      full_name: fullName,
-      last_name: lastName,
-    });
+    for (const d of driversArr) {
+      const driverKey = String(d.NASCARDriverID ?? d.Number ?? "");
+      if (!driverKey) continue;
+      const carNumber = String(d.Number ?? "");
+      const fullName = d.FullName ?? "";
+      const lastName = fullName.split(" ").slice(-1)[0] ?? "";
 
-    const laps = d.Laps ?? [];
-    for (const lap of laps) {
-      const lapNumber = lap.Lap;
-      const lapTime = lap.LapTime;
-      if (lapNumber == null || lapTime == null || lapTime <= 0) continue;
-      lapRows.push({
+      driverRows.push({
         session_id: session.id,
         driver_key: driverKey,
-        lap_number: lapNumber,
-        lap_time: lapTime,
+        car_number: carNumber,
+        full_name: fullName,
+        last_name: lastName,
       });
-    }
 
-    // Running position = position on the most recent lap
-    if (laps.length > 0) {
-      const lastLap = laps[laps.length - 1];
-      if (lastLap.RunningPos != null) {
-        positionMap.set(driverKey, lastLap.RunningPos);
+      // Handle both "Laps" (PascalCase) and "laps" (camelCase)
+      const laps = d.Laps ?? d.laps ?? [];
+      for (const lap of laps) {
+        // Handle PascalCase (Lap/LapTime/RunningPos) and camelCase (lap/lapTime/running_pos)
+        const lapNumber = lap.Lap ?? lap.lap;
+        const lapTime = lap.LapTime ?? lap.lapTime ?? lap.lap_time;
+        if (lapNumber == null || lapTime == null || lapTime <= 0) continue;
+        lapRows.push({
+          session_id: session.id,
+          driver_key: driverKey,
+          lap_number: lapNumber,
+          lap_time: lapTime,
+        });
+      }
+
+      // Running position from most recent lap
+      if (laps.length > 0) {
+        const lastLap = laps[laps.length - 1];
+        const pos = lastLap.RunningPos ?? lastLap.running_pos ?? lastLap.runningPos;
+        if (pos != null) positionMap.set(driverKey, pos);
       }
     }
-  }
 
-  // Upsert drivers (ignore conflicts — driver list is stable within a session)
-  if (driverRows.length > 0) {
-    await supabase
-      .from("drivers")
-      .upsert(driverRows, { onConflict: "session_id,driver_key", ignoreDuplicates: true });
-  }
+    if (driverRows.length > 0) {
+      await supabase
+        .from("drivers")
+        .upsert(driverRows, { onConflict: "session_id,driver_key", ignoreDuplicates: true });
+    }
 
-  // Upsert laps (compound unique on session_id, driver_key, lap_number)
-  let newLaps = 0;
-  if (lapRows.length > 0) {
-    // Chunked to avoid payload size limits
-    const CHUNK = 500;
-    for (let i = 0; i < lapRows.length; i += CHUNK) {
-      const chunk = lapRows.slice(i, i + CHUNK);
-      const { error } = await supabase
-        .from("laps")
-        .upsert(chunk, { onConflict: "session_id,driver_key,lap_number" });
-      if (!error) newLaps += chunk.length;
+    if (lapRows.length > 0) {
+      const CHUNK = 500;
+      for (let i = 0; i < lapRows.length; i += CHUNK) {
+        const chunk = lapRows.slice(i, i + CHUNK);
+        const { error } = await supabase
+          .from("laps")
+          .upsert(chunk, { onConflict: "session_id,driver_key,lap_number" });
+        if (!error) newLaps += chunk.length;
+      }
+    }
+
+    if (positionMap.size > 0) {
+      const positionRows = Array.from(positionMap.entries()).map(([driver_key, position]) => ({
+        session_id: session.id,
+        driver_key,
+        position,
+      }));
+      await supabase
+        .from("positions")
+        .upsert(positionRows, { onConflict: "session_id,driver_key" });
     }
   }
 
-  // Overwrite positions (one row per driver)
-  if (positionMap.size > 0) {
-    const positionRows = Array.from(positionMap.entries()).map(([driver_key, position]) => ({
-      session_id: session.id,
-      driver_key,
-      position,
-    }));
-    await supabase
-      .from("positions")
-      .upsert(positionRows, { onConflict: "session_id,driver_key" });
-  }
-
-  // Update session with live-feed context
+  // Always update session heartbeat — even when no lap data came back
   const sessionUpdate: any = {
     last_poll_at: new Date().toISOString(),
     total_laps_seen: (session.total_laps_seen ?? 0) + newLaps,
@@ -198,6 +196,14 @@ serve(async (req) => {
       if (lapData) {
         const newLaps = await processLapTimes(supabase, session, lapData, liveData);
         totalNewLaps += newLaps;
+      } else {
+        // lap-times.json returned null (404 or invalid JSON). Still heartbeat the session
+        // so last_poll_at stays fresh and we can diagnose via last_error in dashboard.
+        const hb: any = { last_poll_at: new Date().toISOString(), last_error: `lap-times null (${pollUrl})` };
+        if (liveData?.flag_state != null) hb.flag_state = liveData.flag_state;
+        if (liveData?.lap_number != null) hb.current_lap = liveData.lap_number;
+        if (liveData?.laps_in_race != null) hb.laps_in_race = liveData.laps_in_race;
+        await supabase.from("sessions").update(hb).eq("id", session.id);
       }
 
       polls++;
