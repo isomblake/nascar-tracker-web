@@ -416,6 +416,20 @@ export default function App() {
       return t / cPairs;
     })() : null;
 
+    // Cumulative gap: sum of (myTime - theirTime) over all shared clean laps.
+    // Positive = primary accumulated more time (slower overall) → losing ground regardless of position.
+    // Negative = primary accumulated less time (faster overall) → gaining ground.
+    const myClMap = new Map(myClLaps.map(([n, t]) => [n, t]));
+    const theirClMap = new Map(theirCl.map(([n, t]) => [n, t]));
+    let cumulativeGap = 0;
+    let cumulativePairs = 0;
+    for (const [lap, myT] of myClMap) {
+      const theirT = theirClMap.get(lap);
+      if (theirT != null) { cumulativeGap += myT - theirT; cumulativePairs++; }
+    }
+    const hasCumGap = cumulativePairs >= 3;
+    const cumGapColor = cumulativeGap > 0 ? "#ef4444" : "#22c55e";
+
     // Trend label depends on whether they're ahead or behind of primary driver
     let trendLabel = null;
     let trendColor = null;
@@ -484,6 +498,12 @@ export default function App() {
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 9, color: sub }}>P{SIM_POS[name] || "?"} · last lap</div>
             <div style={{ fontSize: 18, fontWeight: 800, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
+            {hasCumGap && (
+              <>
+                <div style={{ fontSize: 9, color: sub, marginTop: 4 }}>~{cumulativePairs}L gap</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: cumGapColor, ...MF }}>{cumulativeGap > 0 ? "+" : ""}{cumulativeGap.toFixed(1)}s</div>
+              </>
+            )}
           </div>
         </div>
 
