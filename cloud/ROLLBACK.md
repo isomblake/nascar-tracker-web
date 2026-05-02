@@ -5,6 +5,29 @@ is documented here with the exact commands to flip it.
 
 ---
 
+## Decision 5: Edge function JWT verification — disabled
+
+**Current:** All three edge functions (`detect-session`, `poll-nascar`, `stop-session`) have
+"Verify JWT with legacy secret" **OFF**.
+
+**Why:** The Vercel env var `REACT_APP_SUPABASE_ANON_KEY` holds the new publishable key format
+(`sb_publishable_*`), which is not a JWT. With verification on, every START tap returned
+"Invalid JWT". The functions have no user identity to verify anyway — they use the service_role
+key internally and are called by either pg_cron or the public PWA.
+
+**To re-enable** (only needed if you switch to a legacy `eyJ*` anon key):
+1. Dashboard → Functions → each function → Settings → toggle "Verify JWT with legacy secret" ON
+2. Or via Management API:
+   ```bash
+   curl -X PATCH "https://api.supabase.com/v1/projects/ofqqgbgxoywnqoukvwth/functions/<slug>" \
+     -H "Authorization: Bearer <sbp_PAT>" \
+     -H "Content-Type: application/json" \
+     -d '{"verify_jwt": true}'
+   ```
+   Repeat for detect-session, poll-nascar, stop-session.
+
+---
+
 ## Decision 1: Polling vs Realtime
 
 **Current:** PWA polls Supabase every 3s for lap/position data, every 15s for session discovery.
@@ -74,8 +97,9 @@ Not worth doing unless the manual Start button becomes annoying.
 
 ## Decision 4: Scan window for race IDs
 
-**Current:** `detect-session` scans race IDs 5605-5640 (36 IDs, ~3 seconds).
-Kansas was 5607. Works for all of 2026 season if IDs stay sequential.
+**Current:** `detect-session` scans race IDs 5605-5660 (56 IDs) across series 1, 2, and 3
+in parallel (168 total fetch calls per START tap). Kansas Cup was 5607. Race IDs appear
+to be globally sequential across all series in 2026.
 
 ### When to widen:
 
@@ -84,10 +108,48 @@ bump the constants in `supabase/functions/detect-session/index.ts`:
 
 ```ts
 const SCAN_START = 5605;  // lower this
-const SCAN_END = 5640;    // or raise this
+const SCAN_END = 5660;    // or raise this
 ```
 
-Keep the window under ~60 IDs or the 3s HTTP timeout starts eating into legitimate scans.
+Keep the window under ~80 IDs per series (240 total calls) or the Deno concurrent-fetch
+overhead starts adding up vs. the 3s timeout.
+
+---
+
+## Decision 6: Multi-series support (Cup + Xfinity + Truck)
+
+**Current:** `detect-session` scans all three series (1=Cup, 2=Xfinity, 3=Truck).
+When multiple series are live simultaneously, Cup wins; if Cup isn't live, Xfinity
+auto-selected; then Truck. Allows testing against Xfinity/Truck practice and races.
+
+**Toast now shows:** `✓ Texas · Xfinity practice1`
+
+### To revert to Cup-only:
+
+In `supabase/functions/detect-session/index.ts`, replace `ALL_SERIES` with:
+```ts
+const ALL_SERIES = [{ id: 1, name: "Cup" }];
+```
+Then push to main (deploy-functions workflow will redeploy automatically).
+
+---
+
+## Decision 7: Automated edge function deployment via GitHub Actions
+
+**Current:** `.github/workflows/deploy-functions.yml` auto-deploys all three edge
+functions whenever `cloud/supabase/functions/**` changes on `main` or `claude/**`
+branches. Always deploys with `--no-verify-jwt` so the JWT fix is never accidentally
+re-enabled by a redeploy.
+
+### To deploy manually without a code change:
+
+GitHub → Actions → "Deploy Supabase edge functions" → Run workflow.
+
+### If the SUPABASE_PAT secret expires (May 20 2026):
+
+1. Create a new PAT at https://supabase.com/dashboard/account/tokens
+2. Update the `SUPABASE_PAT` GitHub Actions secret:
+   GitHub → Settings → Secrets → Actions → `SUPABASE_PAT` → Update.
 
 ---
 
