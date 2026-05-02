@@ -235,18 +235,11 @@ serve(async (req) => {
 
       const [lapData, liveData] = await Promise.all([fetchJson(pollUrl), fetchJson(liveUrl)]);
 
-      if (lapData) {
-        const newLaps = await processLapTimes(supabase, session, lapData, liveData);
-        totalNewLaps += newLaps;
-      } else {
-        // lap-times.json returned null (404 or invalid JSON). Still heartbeat the session
-        // so last_poll_at stays fresh and we can diagnose via last_error in dashboard.
-        const hb: any = { last_poll_at: new Date().toISOString(), last_error: `lap-times null (${pollUrl})` };
-        if (liveData?.flag_state != null) hb.flag_state = liveData.flag_state;
-        if (liveData?.lap_number != null) hb.current_lap = liveData.lap_number;
-        if (liveData?.laps_in_race != null) hb.laps_in_race = liveData.laps_in_race;
-        await supabase.from("sessions").update(hb).eq("id", session.id);
-      }
+      // Always call processLapTimes — it handles lapData=null by falling back to
+      // live-feed.json vehicles (practice sessions often serve no lap-times.json).
+      // Race path is unchanged: lapData is always present for races.
+      const newLaps = await processLapTimes(supabase, session, lapData, liveData);
+      totalNewLaps += newLaps;
 
       polls++;
 
