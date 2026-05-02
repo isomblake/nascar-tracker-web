@@ -98,28 +98,25 @@ export default function SessionControl({ session, dark, onAfterAction, compact =
           disabled={loading}
           aria-label={isActive ? "Stop tracking" : "Start tracking"}
           style={{
+            width: 40,
             height: 40,
-            padding: "0 10px",
             borderRadius: 6,
             border: "none",
-            fontSize: 12,
+            fontSize: 16,
             fontWeight: 800,
-            letterSpacing: "0.5px",
             cursor: loading ? "wait" : "pointer",
             opacity: loading ? 0.7 : 1,
             background: isActive ? "#ef4444" : "#22c55e",
             color: isActive ? "#fff" : "#000",
             display: "flex",
             alignItems: "center",
-            gap: 4,
+            justifyContent: "center",
             WebkitTapHighlightColor: "transparent",
             touchAction: "manipulation",
-            whiteSpace: "nowrap",
+            flexShrink: 0,
           }}
         >
-          {loading ? "…" : isActive
-            ? <><span style={{ fontSize: 10 }}>■</span><span>Stop</span></>
-            : <><span style={{ fontSize: 10 }}>▶</span><span>Start</span></>}
+          {loading ? "…" : isActive ? "■" : "▶"}
         </button>
       </>
     );
