@@ -404,10 +404,11 @@ export default function App() {
     const d = (myLL != null && theirLL != null) ? myLL - theirLL : null;
     const dc = d == null ? sub : d > 0 ? "#ef4444" : "#22c55e";
 
+    // All-lap maps (crossing-time gap and per-lap delta bars both use these)
+    const myMap = new Map((LAPS[primaryResolved] || []).map(([n, t]) => [n, t]));
+    const theirMap = new Map((LAPS[name] || []).map(([n, t]) => [n, t]));
+
     // Gap trend: positive = my laps slower than theirs.
-    // For "car ahead" (they're faster we're losing the gap): positive = losing ground
-    // For "car behind" (they're faster they're catching us): positive = they're catching up = "Losing"
-    //                                                      negative = we're pulling away = "Extending"
     const gapPerLap = cPairs >= 3 ? (() => {
       let t = 0;
       for (let i = 0; i < cPairs; i++) {
@@ -416,16 +417,13 @@ export default function App() {
       return t / cPairs;
     })() : null;
 
-    // Cumulative gap: sum of (myTime - theirTime) over all shared clean laps.
-    // Positive = primary accumulated more time (slower overall) → losing ground regardless of position.
-    // Negative = primary accumulated less time (faster overall) → gaining ground.
-    const myClMap = new Map(myClLaps.map(([n, t]) => [n, t]));
-    const theirClMap = new Map(theirCl.map(([n, t]) => [n, t]));
+    // Crossing-time gap: sum ALL laps (including pits/cautions) since that real elapsed time
+    // determines when each car actually crosses the line. Positive = primary crossed later = behind.
     let cumulativeGap = 0;
     let cumulativePairs = 0;
-    for (const [lap, myT] of myClMap) {
-      const theirT = theirClMap.get(lap);
-      if (theirT != null) { cumulativeGap += myT - theirT; cumulativePairs++; }
+    for (const [lap, myT] of myMap) {
+      const theirT = theirMap.get(lap);
+      if (theirT != null && myT > 0 && theirT > 0) { cumulativeGap += myT - theirT; cumulativePairs++; }
     }
     const hasCumGap = cumulativePairs >= 3;
     const cumGapColor = cumulativeGap > 0 ? "#ef4444" : "#22c55e";
@@ -447,8 +445,6 @@ export default function App() {
       }
     }
 
-    const myMap = new Map((LAPS[primaryResolved] || []).map(([n, t]) => [n, t]));
-    const theirMap = new Map((LAPS[name] || []).map(([n, t]) => [n, t]));
     const allNums = [...new Set([...myMap.keys(), ...theirMap.keys()])].sort((a, b) => a - b);
     const deltaLaps = (extraWindow === "all" ? allNums : allNums.slice(-lapCount)).map((n) => {
       const mt = myMap.get(n), tt = theirMap.get(n);
@@ -496,12 +492,18 @@ export default function App() {
             </div>
           </div>
           <div style={{ textAlign: "right" }}>
-            <div style={{ fontSize: 9, color: sub }}>P{SIM_POS[name] || "?"} · last lap</div>
-            <div style={{ fontSize: 18, fontWeight: 800, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
-            {hasCumGap && (
+            <div style={{ fontSize: 9, color: sub }}>P{SIM_POS[name] || "?"}</div>
+            {hasCumGap ? (
               <>
-                <div style={{ fontSize: 9, color: sub, marginTop: 4 }}>~{cumulativePairs}L gap</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: cumGapColor, ...MF }}>{cumulativeGap > 0 ? "+" : ""}{cumulativeGap.toFixed(1)}s</div>
+                <div style={{ fontSize: 9, color: sub }}>GAP</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: fg, ...MF, lineHeight: 1.1 }}>{Math.abs(cumulativeGap).toFixed(2)}s</div>
+                <div style={{ fontSize: 9, color: sub, marginTop: 3 }}>last lap</div>
+                <div style={{ fontSize: 13, fontWeight: 700, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
+              </>
+            ) : (
+              <>
+                <div style={{ fontSize: 9, color: sub }}>last lap</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
               </>
             )}
           </div>
