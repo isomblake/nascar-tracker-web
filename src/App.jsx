@@ -383,7 +383,7 @@ export default function App() {
     );
   }
 
-  const HH = 60, TH = 44, ST = HH + TH;
+  const HH = 60, MTH = 44, TH = 44, ST = HH + MTH + TH;
 
   /* ─── Comparison card for race mode ─── */
   const RaceComp = ({ label, emoji, name, borderColor, isBehind }) => {
@@ -551,12 +551,12 @@ export default function App() {
   };
 
   return (
-    <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto" }}>
-      {/* HEADER */}
-      <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", borderBottom: `1px solid ${bdr}`, background: bg, position: "sticky", top: 0, zIndex: 10 }}>
-        <div>
+    <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto", overflowX: "hidden" }}>
+      {/* HEADER — title + two icon buttons only, no overflow */}
+      <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", background: bg, position: "sticky", top: 0, zIndex: 10 }}>
+        <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
           <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>RACE ANALYTICS</div>
-          <div style={{ fontSize: 10, color: sub }}>
+          <div style={{ fontSize: 10, color: sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {session?.track_name?.toUpperCase() || "—"}
             {session?.current_lap != null && session?.laps_in_race != null && session.laps_in_race > 0 && (
               <span> · L{session.current_lap}/{session.laps_in_race}</span>
@@ -575,13 +575,17 @@ export default function App() {
             })()}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {["Race", "Practice", "History"].map((m) => (
-            <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 52, height: 40, padding: "0 10px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
-          ))}
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
           <SessionControl session={session} dark={dark} onAfterAction={live.reload} compact />
           <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 40, height: 40, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
         </div>
+      </div>
+
+      {/* MODE TABS — full-width, no overflow possible */}
+      <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, background: bg, position: "sticky", top: HH, zIndex: 10 }}>
+        {["Race", "Practice", "History"].map((m) => (
+          <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ flex: 1, padding: "10px", background: "transparent", color: mode === m.toLowerCase() ? acc : sub, border: "none", borderBottom: mode === m.toLowerCase() ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: MTH }}>{m}</button>
+        ))}
       </div>
 
       {/* SETTINGS */}
@@ -612,7 +616,7 @@ export default function App() {
       {/* ═══ RACE ═══ */}
       {mode === "race" && (
         <>
-          <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH, background: bg, zIndex: 9 }}>
+          <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
             {["Dashboard", "Full Field", "Chart"].map((t, i) => (
               <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "10px", background: "transparent", color: tab === i ? acc : sub, border: "none", borderBottom: tab === i ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
             ))}
@@ -731,7 +735,7 @@ export default function App() {
 
           {tab === 1 && (
             <div>
-              <div style={{ display: "flex", gap: 0, padding: "6px 14px", borderBottom: `1px solid ${bdr}`, overflowX: "auto", position: "sticky", top: HH + TH, background: bg, zIndex: 8 }}>
+              <div style={{ display: "flex", gap: 0, padding: "6px 14px", borderBottom: `1px solid ${bdr}`, overflowX: "auto", position: "sticky", top: HH + MTH + TH, background: bg, zIndex: 8 }}>
                 {[{ k: "pos", l: "Pos" }, { k: "last", l: "Last" }, { k: "t5", l: "5L" }, { k: "t10", l: "10L" }, { k: "t15", l: "15L" }, { k: "t20", l: "20L" }, { k: "t25", l: "25L" }, { k: extraWindow ? "t" + extraWindow : "t30", l: extraWindow ? extraWindow + "L" : "30L" }, { k: "best", l: "Best" }].map((c) => (
                   <button key={c.k} onClick={() => setFieldSort(c.k)} style={{ padding: "6px 10px", background: "transparent", border: "none", color: fieldSort === c.k ? acc : sub, fontSize: 11, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
                     {c.l}{fieldSort === c.k ? " ▼" : ""}
@@ -753,7 +757,7 @@ export default function App() {
                 const others = sortedAll.filter((n) => n !== primaryResolved);
                 return (
                   <>
-                    <div style={{ position: "sticky", top: ST + 32, zIndex: 8, background: bg, borderBottom: `2px solid ${acc}` }}>
+                    <div style={{ position: "sticky", top: HH + MTH + TH + 32, zIndex: 8, background: bg, borderBottom: `2px solid ${acc}` }}>
                       <FieldRow name={primaryResolved} primary={primaryResolved} compDrivers={compDrivers} dark={dark} me={me} onSetPrimary={setPrimary} sortRank={ranks[primaryResolved]} sortKey={fieldSort} extraW={extraWindow} BEST={BEST} SIM_POS={SIM_POS} NUM={NUM} LAST_LAP_TIME={LAST_LAP_TIME} />
                     </div>
                     {others.map((n) => (
@@ -797,7 +801,7 @@ export default function App() {
       {/* ═══ PRACTICE ═══ */}
       {mode === "practice" && (
         <>
-          <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH, background: bg, zIndex: 9 }}>
+          <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
             {["Dashboard", "Chart"].map((t) => (
               <button key={t} onClick={() => setPView(t.toLowerCase().replace(" ", ""))} style={{ flex: 1, padding: "10px", background: "transparent", color: pView === t.toLowerCase().replace(" ", "") ? acc : sub, border: "none", borderBottom: pView === t.toLowerCase().replace(" ", "") ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
             ))}
