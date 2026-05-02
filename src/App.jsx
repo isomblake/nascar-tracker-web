@@ -575,7 +575,10 @@ export default function App() {
             })()}
           </div>
         </div>
-        <div style={{ display: "flex", gap: 6, alignItems: "center", flexShrink: 0 }}>
+        <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          {["Race", "Practice", "History"].map((m) => (
+            <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 52, height: 40, padding: "0 10px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
+          ))}
           <SessionControl session={session} dark={dark} onAfterAction={live.reload} compact />
           <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 40, height: 40, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
         </div>
