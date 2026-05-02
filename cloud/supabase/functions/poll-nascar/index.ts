@@ -50,8 +50,48 @@ async function processLapTimes(
   lapData: any,
   liveData: any
 ): Promise<number> {
-  // lap-times.json top-level key varies by series: "laps" (Cup) or "Laps" (Truck/Xfinity)
-  const driversArr = lapData?.laps ?? lapData?.Laps ?? [];
+  // 1. Try lap-times.json: walk all top-level keys to find the driver array.
+  //    Key varies: "laps" (Cup), "Laps" (Truck/Xfinity), or other.
+  let driversArr: any[] = lapData?.laps ?? lapData?.Laps ?? [];
+  if (driversArr.length === 0 && lapData && typeof lapData === "object") {
+    for (const key of Object.keys(lapData)) {
+      const val = lapData[key];
+      if (Array.isArray(val) && val.length > 0) {
+        const first = val[0];
+        if (first?.NASCARDriverID != null || first?.vehicle_number != null || first?.Number != null) {
+          driversArr = val;
+          break;
+        }
+      }
+    }
+  }
+
+  // 2. Fallback: live-feed.json vehicles array (practice sessions often only populate here).
+  //    During practice the CDN may only serve live-feed.json with per-vehicle state
+  //    (laps_completed + last_lap_time) rather than a full lap-by-lap array.
+  //    We synthesise a single lap record per driver per poll using laps_completed as
+  //    the lap number — upsert deduplication means repeated polls for the same lap are
+  //    ignored and new laps accumulate naturally.
+  if (driversArr.length === 0) {
+    const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
+    driversArr = vehicles
+      .filter((v: any) => v.laps_completed != null || (v.laps ?? v.Laps)?.length > 0)
+      .map((v: any) => {
+        const existingLaps = v.laps ?? v.Laps ?? [];
+        // If no laps array, synthesise one entry from aggregate fields
+        const synthLaps = existingLaps.length === 0 && v.laps_completed != null && v.last_lap_time != null && v.last_lap_time > 0
+          ? [{ Lap: v.laps_completed, LapTime: v.last_lap_time }]
+          : existingLaps;
+        return {
+          NASCARDriverID: v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.vehicle_number,
+          Number: v.vehicle_number ?? v.Number,
+          FullName: v.driver?.FullName ?? v.FullName ?? v.driver?.full_name ?? "",
+          Laps: synthLaps,
+          running_position: v.running_position ?? v.RunningPos,
+          practice_group: v.practice_group ?? v.PracticeGroup ?? null,
+        };
+      });
+  }
 
   let newLaps = 0;
 
@@ -73,13 +113,14 @@ async function processLapTimes(
         car_number: carNumber,
         full_name: fullName,
         last_name: lastName,
+        practice_group: d.practice_group ?? null,
       });
 
       // Handle both "Laps" (PascalCase) and "laps" (camelCase)
       const laps = d.Laps ?? d.laps ?? [];
       for (const lap of laps) {
-        // Handle PascalCase (Lap/LapTime/RunningPos) and camelCase (lap/lapTime/running_pos)
-        const lapNumber = lap.Lap ?? lap.lap;
+        // Handle PascalCase (Lap/LapTime/RunningPos), camelCase (lap/lapTime/running_pos), snake_case (lap_number)
+        const lapNumber = lap.Lap ?? lap.lap ?? lap.lap_number;
         const lapTime = lap.LapTime ?? lap.lapTime ?? lap.lap_time;
         if (lapNumber == null || lapTime == null || lapTime <= 0) continue;
         lapRows.push({
@@ -90,8 +131,11 @@ async function processLapTimes(
         });
       }
 
-      // Running position from most recent lap
-      if (laps.length > 0) {
+      // Running position: try per-lap field first, then top-level vehicle field (live-feed fallback)
+      const topLevelPos = d.running_position ?? d.RunningPos ?? d.running_pos;
+      if (topLevelPos != null) {
+        positionMap.set(driverKey, topLevelPos);
+      } else if (laps.length > 0) {
         const lastLap = laps[laps.length - 1];
         const pos = lastLap.RunningPos ?? lastLap.running_pos ?? lastLap.runningPos;
         if (pos != null) positionMap.set(driverKey, pos);
@@ -101,7 +145,7 @@ async function processLapTimes(
     if (driverRows.length > 0) {
       await supabase
         .from("drivers")
-        .upsert(driverRows, { onConflict: "session_id,driver_key", ignoreDuplicates: true });
+        .upsert(driverRows, { onConflict: "session_id,driver_key" });
     }
 
     if (lapRows.length > 0) {
@@ -193,18 +237,11 @@ serve(async (req) => {
 
       const [lapData, liveData] = await Promise.all([fetchJson(pollUrl), fetchJson(liveUrl)]);
 
-      if (lapData) {
-        const newLaps = await processLapTimes(supabase, session, lapData, liveData);
-        totalNewLaps += newLaps;
-      } else {
-        // lap-times.json returned null (404 or invalid JSON). Still heartbeat the session
-        // so last_poll_at stays fresh and we can diagnose via last_error in dashboard.
-        const hb: any = { last_poll_at: new Date().toISOString(), last_error: `lap-times null (${pollUrl})` };
-        if (liveData?.flag_state != null) hb.flag_state = liveData.flag_state;
-        if (liveData?.lap_number != null) hb.current_lap = liveData.lap_number;
-        if (liveData?.laps_in_race != null) hb.laps_in_race = liveData.laps_in_race;
-        await supabase.from("sessions").update(hb).eq("id", session.id);
-      }
+      // Always call processLapTimes — it handles lapData=null by falling back to
+      // live-feed.json vehicles (practice sessions often serve no lap-times.json).
+      // Race path is unchanged: lapData is always present for races.
+      const newLaps = await processLapTimes(supabase, session, lapData, liveData);
+      totalNewLaps += newLaps;
 
       polls++;
 

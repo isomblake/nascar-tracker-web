@@ -24,7 +24,7 @@ const corsHeaders = {
 // Widen SCAN_END if detect-session returns no_live_session during a known live
 // event — see cloud/ROLLBACK.md Decision 4.
 const SCAN_START = 5605;
-const SCAN_END = 5720;
+const SCAN_END = 5800;
 
 const ALL_SERIES = [
   { id: 1, name: "Cup" },

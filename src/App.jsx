@@ -5,13 +5,13 @@ import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 
 /* ═══ HISTORY FETCH ═══ */
-async function fetchHistory(trackName, series = 1, forceRefresh = false) {
+async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
   const base = process.env.REACT_APP_SUPABASE_URL;
   const key  = process.env.REACT_APP_SUPABASE_ANON_KEY;
   const r = await fetch(`${base}/functions/v1/fetch-history`, {
     method: "POST",
     headers: { Authorization: `Bearer ${key}`, apikey: key, "Content-Type": "application/json" },
-    body: JSON.stringify({ track_name: trackName, series, force_refresh: forceRefresh }),
+    body: JSON.stringify({ track_name: trackName, series, force_refresh: forceRefresh, run_type: runType }),
   });
   return r.json();
 }
@@ -293,6 +293,12 @@ export default function App() {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyError, setHistoryError] = useState(null);
   const hist = useHistorySession(historySessionId);
+
+  // ── Practice history state ─────────────────────────────────────
+  const [practHistSessionId, setPractHistSessionId] = useState(null);
+  const [practHistLoading, setPractHistLoading] = useState(false);
+  const [practHistError, setPractHistError] = useState(null);
+  const practHist = useHistorySession(practHistSessionId);
   const [tab, setTab] = useState(0);
   const [primary, setPrimary] = useState("Brad Keselowski");
   const [compDrivers, setCompDrivers] = useState([]);
@@ -824,8 +830,90 @@ export default function App() {
       )}
 
       {/* ═══ PRACTICE ═══ */}
-      {mode === "practice" && (
+      {mode === "practice" && (() => {
+        const usingPH = practHistSessionId != null && practHist.NAMES?.length > 0;
+        const pB = usingPH ? practHist.BEST : BEST;
+        const pE = usingPH ? practHist.EOR : EOR;
+        const pL = usingPH ? practHist.LAPS : LAPS;
+        const pG = usingPH ? practHist.GROUPS : GROUPS;
+        const pN = usingPH ? practHist.NUM : NUM;
+        const pNA = usingPH ? practHist.NAMES : NAMES;
+        const pC = usingPH ? practHist.CLR : CLR;
+        const pPri = pNA.includes(primaryResolved) ? primaryResolved : (pNA[0] || primaryResolved);
+        const pSess = usingPH ? practHist.session : session;
+
+        // Chart data computed from the active practice source (historical or live)
+        const pChartData = (() => {
+          const allLapNums = new Set();
+          [...cDrivers].forEach((n) => (pL[n] || []).forEach(([l]) => allLapNums.add(l)));
+          const sorted = [...allLapNums].sort((a, b) => a - b);
+          const windowed = chartWindow > 0 ? sorted.slice(-chartWindow) : sorted;
+          return windowed.map((lap) => {
+            const pt = { lap };
+            cDrivers.forEach((n) => {
+              const f = (pL[n] || []).find(([l]) => l === lap);
+              const dThr = thrFor(pB, n);
+              if (f && f[1] > 0 && f[1] <= dThr) pt[n] = f[1];
+            });
+            return pt;
+          });
+        })();
+
+        const handleLoadPractHist = async (runType) => {
+          const trackName = session?.track_name;
+          const seriesNum = session?.series ?? 1;
+          if (!trackName) return;
+          setPractHistLoading(true);
+          setPractHistError(null);
+          setPractHistSessionId(null);
+          try {
+            const res = await fetchHistory(trackName, seriesNum, false, runType);
+            if (res.ok && res.sessions?.length > 0) {
+              setPractHistSessionId(res.sessions[0].id);
+            } else {
+              setPractHistError(res.message || res.error || "No practice data found.");
+            }
+          } catch (e) {
+            setPractHistError(e.message || "Fetch failed.");
+          } finally {
+            setPractHistLoading(false);
+          }
+        };
+
+        return (
         <>
+          {/* Practice source banner */}
+          <div style={{ padding: "6px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${bdr}`, background: usingPH ? (dark ? "#0d0d2a" : "#eef2ff") : bg }}>
+            <div style={{ fontSize: 10, color: usingPH ? acc : sub }}>
+              {usingPH
+                ? `${pSess?.track_name || ""} · ${pSess?.session_type?.toUpperCase() || ""} · ${pSess?.session_date || ""}`
+                : session?.track_name ? `LIVE · ${session.track_name}` : "No live session"}
+            </div>
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              {usingPH && (
+                <button onClick={() => { setPractHistSessionId(null); setPractHistError(null); }}
+                  style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, borderRadius: 4, border: `1px solid ${bdr}`, background: "transparent", color: sub, cursor: "pointer" }}>
+                  ✕ Live
+                </button>
+              )}
+              {session?.track_name && (
+                <>
+                  <button onClick={() => handleLoadPractHist(1)} disabled={practHistLoading}
+                    style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, borderRadius: 4, border: `1px solid ${bdr}`, background: "transparent", color: fg, cursor: practHistLoading ? "wait" : "pointer", opacity: practHistLoading ? 0.6 : 1 }}>
+                    {practHistLoading ? "…" : "P1"}
+                  </button>
+                  <button onClick={() => handleLoadPractHist(2)} disabled={practHistLoading}
+                    style={{ padding: "3px 8px", fontSize: 10, fontWeight: 600, borderRadius: 4, border: `1px solid ${acc}`, background: usingPH ? acc : "transparent", color: usingPH ? "#fff" : acc, cursor: practHistLoading ? "wait" : "pointer", opacity: practHistLoading ? 0.6 : 1 }}>
+                    {practHistLoading ? "…" : "Final"}
+                  </button>
+                </>
+              )}
+            </div>
+          </div>
+          {practHistError && (
+            <div style={{ padding: "6px 12px", fontSize: 11, color: "#ef4444" }}>{practHistError}</div>
+          )}
+
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
             {["Dashboard", "Chart"].map((t) => (
               <button key={t} onClick={() => setPView(t.toLowerCase().replace(" ", ""))} style={{ flex: 1, padding: "10px", background: "transparent", color: pView === t.toLowerCase().replace(" ", "") ? acc : sub, border: "none", borderBottom: pView === t.toLowerCase().replace(" ", "") ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
@@ -845,36 +933,36 @@ export default function App() {
 
               <div style={{ background: dark ? acc + "10" : acc + "08", border: `1px solid ${acc}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-                  <div style={{ fontSize: 15, fontWeight: 800, color: acc }}>★ #{NUM[primaryResolved] || "?"} {primaryResolved}</div>
-                  <div style={{ fontSize: 10, color: sub }}>G{GROUPS[primaryResolved] || "?"} · {BEST[primaryResolved]?.tl || 0} laps</div>
+                  <div style={{ fontSize: 15, fontWeight: 800, color: acc }}>★ #{pN[pPri] || "?"} {pPri}</div>
+                  <div style={{ fontSize: 10, color: sub }}>G{pG[pPri] || "?"} · {pB[pPri]?.tl || 0} laps</div>
                 </div>
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>BEST WINDOW</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 10 }}>
                   {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => (
-                    <StatCell key={k} label={k.replace("t", "") + "L"} value={BEST[primaryResolved]?.[k]} rk={rank(BEST, k, primaryResolved, NAMES.filter((n) => pGroup === 0 || GROUPS[n] === pGroup))} dark={dark} />
+                    <StatCell key={k} label={k.replace("t", "") + "L"} value={pB[pPri]?.[k]} rk={rank(pB, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
                   ))}
                 </div>
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>END OF RUN (worn tires)</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
                   {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => (
-                    <StatCell key={k + "e"} label={k.replace("t", "") + "L"} value={EOR[primaryResolved]?.[k]} rk={rank(EOR, k, primaryResolved, NAMES.filter((n) => pGroup === 0 || GROUPS[n] === pGroup))} dark={dark} />
+                    <StatCell key={k + "e"} label={k.replace("t", "") + "L"} value={pE[pPri]?.[k]} rk={rank(pE, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
                   ))}
                 </div>
               </div>
 
               <div style={{ marginTop: 16 }}>
-                <RankTable title="BEST WINDOW RANKINGS" dataset={BEST} primary={primaryResolved} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={NAMES} GROUPS={GROUPS} NUM={NUM} BEST={BEST} />
+                <RankTable title="BEST WINDOW RANKINGS" dataset={pB} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} />
               </div>
 
-              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={EOR} primary={primaryResolved} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={NAMES} GROUPS={GROUPS} NUM={NUM} BEST={BEST} showRunLength />
+              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={pE} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} showRunLength />
 
-              <FalloffCard primary={primaryResolved} compDrivers={compDrivers} dark={dark} BEST={BEST} EOR={EOR} NUM={NUM} />
+              <FalloffCard primary={pPri} compDrivers={compDrivers} dark={dark} BEST={pB} EOR={pE} NUM={pN} />
 
-              {compDrivers.filter((n) => n !== primaryResolved).length > 0 && (
+              {compDrivers.filter((n) => n !== pPri).length > 0 && (
                 <div>
                   <div style={{ fontSize: 10, color: sub, fontWeight: 700, letterSpacing: 1, marginBottom: 6 }}>HEAD TO HEAD</div>
-                  {compDrivers.filter((n) => n !== primaryResolved).map((n) => (
-                    <PracticeCompCard key={n} name={n} primary={primaryResolved} dark={dark} BEST={BEST} EOR={EOR} NUM={NUM} GROUPS={GROUPS} extraWindow={extraWindow} />
+                  {compDrivers.filter((n) => n !== pPri).map((n) => (
+                    <PracticeCompCard key={n} name={n} primary={pPri} dark={dark} BEST={pB} EOR={pE} NUM={pN} GROUPS={pG} extraWindow={extraWindow} />
                   ))}
                 </div>
               )}
@@ -891,24 +979,25 @@ export default function App() {
               </div>
               <div style={{ height: 300 }}>
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart data={chartData} margin={{ top: 8, right: 8, left: -4, bottom: 8 }}>
+                  <LineChart data={pChartData} margin={{ top: 8, right: 8, left: -4, bottom: 8 }}>
                     <CartesianGrid stroke={dark ? "#14142a" : "#eee"} strokeDasharray="3 3" />
                     <XAxis dataKey="lap" tick={{ fill: sub, fontSize: 9 }} interval="preserveStartEnd" />
                     <YAxis domain={["auto", "auto"]} tick={{ fill: sub, fontSize: 9 }} tickFormatter={(v) => v.toFixed(1)} />
                     <Tooltip contentStyle={{ background: dark ? "#12121f" : "#fff", border: `1px solid ${bdr}`, fontSize: 11 }} />
-                    {[...cDrivers].map((n) => LAPS[n] ? (<Line key={n} type="monotone" dataKey={n} stroke={CLR[n] || acc} strokeWidth={n === primaryResolved ? 3 : 1.5} dot={false} />) : null)}
+                    {[...cDrivers].map((n) => pL[n] ? (<Line key={n} type="monotone" dataKey={n} stroke={pC[n] || acc} strokeWidth={n === pPri ? 3 : 1.5} dot={false} />) : null)}
                   </LineChart>
                 </ResponsiveContainer>
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 5, padding: "8px 8px" }}>
-                {[...NAMES].sort((a, b) => (parseInt(NUM[a], 10) || 99) - (parseInt(NUM[b], 10) || 99)).map((n) => (
-                  <button key={n} onClick={() => toggleC(n)} style={{ padding: "4px 8px", fontSize: 10, background: cDrivers.has(n) ? (CLR[n] || acc) : "transparent", color: cDrivers.has(n) ? "#fff" : fg, border: `1px solid ${cDrivers.has(n) ? (CLR[n] || acc) : bdr}`, borderRadius: 4, cursor: "pointer", fontWeight: 600 }}>#{NUM[n] || "?"} {sn(n)}</button>
+                {[...pNA].sort((a, b) => (parseInt(pN[a], 10) || 99) - (parseInt(pN[b], 10) || 99)).map((n) => (
+                  <button key={n} onClick={() => toggleC(n)} style={{ padding: "4px 8px", fontSize: 10, background: cDrivers.has(n) ? (pC[n] || acc) : "transparent", color: cDrivers.has(n) ? "#fff" : fg, border: `1px solid ${cDrivers.has(n) ? (pC[n] || acc) : bdr}`, borderRadius: 4, cursor: "pointer", fontWeight: 600 }}>#{pN[n] || "?"} {sn(n)}</button>
                 ))}
               </div>
             </div>
           )}
         </>
-      )}
+        );
+      })()}
       {/* ═══ HISTORY ═══ */}
       {mode === "history" && (() => {
         const trackName = session?.track_name;
