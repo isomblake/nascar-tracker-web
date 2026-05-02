@@ -297,7 +297,7 @@ export default function App() {
   const [primary, setPrimary] = useState("Brad Keselowski");
   const [compDrivers, setCompDrivers] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
-  const [pView, setPView] = useState("dash");
+  const [pView, setPView] = useState("dashboard");
   const [pGroup, setPGroup] = useState(0);
   const [cDrivers, setCDrivers] = useState(new Set(["Brad Keselowski"]));
   const [fieldSort, setFieldSort] = useState("pos");
@@ -803,7 +803,7 @@ export default function App() {
             ))}
           </div>
 
-          {pView === "dash" && (
+          {pView === "dashboard" && (
             <div style={{ padding: "0 12px" }}>
               <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "center", marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
                 {[{ l: "All", v: 0 }, { l: "Group 1", v: 1 }, { l: "Group 2", v: 2 }].map((g) => (

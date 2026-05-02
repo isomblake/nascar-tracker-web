@@ -70,12 +70,17 @@ async function fetchSchedule(year: number, series: number): Promise<ReturnType<t
 
 // Scan live-feed.json backwards from startId looking for a completed race
 // at the given track. Returns found candidates sorted newest-first.
+// We do NOT filter on flag_state here because the NASCAR CDN often serves
+// a cached flag_state that no longer reflects the final checkered value for
+// older races. Instead we filter by raceDate < today so we never pick up
+// the currently-running event.
 async function scanBackwardsForRace(
   series: number,
   trackKeyword: string,
-  startId: number
+  startId: number,
+  today: string
 ): Promise<{ raceId: number; trackName: string; raceDate: string; runType: number }[]> {
-  const SCAN_BACK = 220;
+  const SCAN_BACK = 400;
   const BATCH = 30;
 
   for (let offset = 1; offset <= SCAN_BACK; offset += BATCH) {
@@ -93,10 +98,11 @@ async function scanBackwardsForRace(
         if (!feed) return null;
         const trackName = String(feed.track_name ?? "");
         if (!trackName.toLowerCase().includes(trackKeyword)) return null;
-        if (feed.flag_state !== 4) return null; // only checkered = completed race
         const runType = parseInt(String(feed.run_type ?? 3), 10);
         if (runType !== 3) return null; // races only
         const raceDate = String(feed.race_date ?? feed.RaceDate ?? "").slice(0, 10);
+        if (!raceDate || raceDate.length < 10) return null;
+        if (raceDate >= today) return null; // skip today's live race
         return { raceId: id, trackName, raceDate, runType };
       })
     );
@@ -181,7 +187,7 @@ serve(async (req) => {
         : null;
 
       if (startId && !isNaN(startId)) {
-        candidates = await scanBackwardsForRace(series, trackKeyword, startId);
+        candidates = await scanBackwardsForRace(series, trackKeyword, startId, today);
       }
     }
 
