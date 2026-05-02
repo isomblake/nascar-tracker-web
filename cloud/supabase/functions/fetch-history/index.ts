@@ -52,6 +52,9 @@ async function fetchSchedule(year: number, series: number): Promise<ReturnType<t
   const urls = [
     `https://cf.nascar.com/cacher/${year}/${series}/schedule.json`,
     `https://cf.nascar.com/cacher/${year}/series_${series}/schedule.json`,
+    `https://cf.nascar.com/cacher/${year}/${series}/races.json`,
+    `https://cf.nascar.com/cacher/${year}/${series}/results.json`,
+    `https://cf.nascar.com/cacher/${year}/${series}/schedule-weekend.json`,
   ];
   for (const url of urls) {
     const data = await fetchJson(url, 6000);
@@ -70,10 +73,9 @@ async function fetchSchedule(year: number, series: number): Promise<ReturnType<t
 
 // Scan live-feed.json backwards from startId looking for a completed race
 // at the given track. Returns found candidates sorted newest-first.
-// We do NOT filter on flag_state here because the NASCAR CDN often serves
-// a cached flag_state that no longer reflects the final checkered value for
-// older races. Instead we filter by raceDate < today so we never pick up
-// the currently-running event.
+// No flag_state filter — the CDN often serves stale values for old IDs.
+// Date filter (raceDate < today) prevents picking up the live event.
+// Large batch size (60) keeps total wall-clock time under ~14s.
 async function scanBackwardsForRace(
   series: number,
   trackKeyword: string,
@@ -81,7 +83,7 @@ async function scanBackwardsForRace(
   today: string
 ): Promise<{ raceId: number; trackName: string; raceDate: string; runType: number }[]> {
   const SCAN_BACK = 400;
-  const BATCH = 30;
+  const BATCH = 60;
 
   for (let offset = 1; offset <= SCAN_BACK; offset += BATCH) {
     const ids: number[] = [];
@@ -93,16 +95,17 @@ async function scanBackwardsForRace(
       ids.map(async (id) => {
         const feed = await fetchJson(
           `https://cf.nascar.com/cacher/live/series_${series}/${id}/live-feed.json`,
-          3000
+          2000
         );
         if (!feed) return null;
-        const trackName = String(feed.track_name ?? "");
+        // Handle both camelCase and PascalCase CDN field names
+        const trackName = String(feed.track_name ?? feed.TrackName ?? "");
         if (!trackName.toLowerCase().includes(trackKeyword)) return null;
-        const runType = parseInt(String(feed.run_type ?? 3), 10);
-        if (runType !== 3) return null; // races only
+        const runType = parseInt(String(feed.run_type ?? feed.RunType ?? 3), 10);
+        if (runType !== 3) return null;
         const raceDate = String(feed.race_date ?? feed.RaceDate ?? "").slice(0, 10);
         if (!raceDate || raceDate.length < 10) return null;
-        if (raceDate >= today) return null; // skip today's live race
+        if (raceDate >= today) return null;
         return { raceId: id, trackName, raceDate, runType };
       })
     );
@@ -174,19 +177,18 @@ serve(async (req) => {
 
     // ── Strategy 2: scan backwards from current session race_id ─
     if (candidates.length === 0) {
+      // Try any recent session (not just non-historical) to get a reference ID.
+      // Fall back to SCAN_END (5720) if the DB has nothing yet.
       const { data: recentSessions } = await supabase
         .from("sessions")
         .select("race_id")
-        .neq("started_by", "historical")
-        .eq("series", series)
-        .order("started_at", { ascending: false })
+        .order("id", { ascending: false })
         .limit(1);
 
-      const startId = recentSessions?.[0]?.race_id
-        ? parseInt(String(recentSessions[0].race_id), 10)
-        : null;
+      const rawId = recentSessions?.[0]?.race_id;
+      const startId = rawId ? parseInt(String(rawId), 10) : 5720;
 
-      if (startId && !isNaN(startId)) {
+      if (!isNaN(startId) && startId > 0) {
         candidates = await scanBackwardsForRace(series, trackKeyword, startId, today);
       }
     }
