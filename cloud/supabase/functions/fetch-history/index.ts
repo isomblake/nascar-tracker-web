@@ -1,10 +1,13 @@
 // supabase/functions/fetch-history/index.ts
 //
 // Called by the PWA History panel before a race weekend.
-// Finds the most recent completed race at the given track via NASCAR's schedule
-// API, fetches its lap-times.json, and stores everything in the DB tagged
-// started_by='historical'. Subsequent calls for the same track hit the DB
-// cache instead of re-fetching from NASCAR.
+// Finds the most recent completed race at the given track, fetches its
+// lap-times.json, and stores everything in the DB tagged started_by='historical'.
+//
+// Discovery strategy:
+//   1. Try NASCAR schedule API (fast, but often unavailable mid-season)
+//   2. Fallback: scan live-feed.json backwards from current session's race_id,
+//      looking for flag_state=4 (checkered) + track name match
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -33,49 +36,75 @@ function mapRunType(runType: number): string {
   return "unknown";
 }
 
-// Normalise any shape NASCAR returns for a schedule entry.
-// The CDN has varied this across years (snake_case, PascalCase, nested).
 function normaliseRace(r: any): { raceId: number; trackName: string; raceDate: string; runType: number } | null {
   const raceId = parseInt(String(r.race_id ?? r.RaceId ?? r.RaceID ?? r.EventId ?? r.event_id ?? ""), 10);
   if (!raceId || isNaN(raceId)) return null;
-
   const trackName = String(r.track_name ?? r.TrackName ?? r.track ?? r.Track ?? "");
   if (!trackName) return null;
-
-  // Date field — may be ISO string or "YYYY-MM-DD"
   const rawDate = r.race_date ?? r.date ?? r.RaceDate ?? r.start_date ?? r.StartDate ?? "";
-  const raceDate = String(rawDate).slice(0, 10); // take YYYY-MM-DD prefix
+  const raceDate = String(rawDate).slice(0, 10);
   if (!raceDate || raceDate.length < 10) return null;
-
   const runType = parseInt(String(r.run_type ?? r.RunType ?? 3), 10);
   return { raceId, trackName, raceDate, runType };
 }
 
-// Fetch the NASCAR CDN schedule for a given year + series.
-// Tries two URL patterns; returns an array of normalised race entries.
 async function fetchSchedule(year: number, series: number): Promise<ReturnType<typeof normaliseRace>[]> {
   const urls = [
     `https://cf.nascar.com/cacher/${year}/${series}/schedule.json`,
     `https://cf.nascar.com/cacher/${year}/series_${series}/schedule.json`,
   ];
-
   for (const url of urls) {
     const data = await fetchJson(url, 6000);
     if (!data) continue;
-
-    // Payload can be an array, or an object with a list somewhere inside
-    let raw: any[] = [];
-    if (Array.isArray(data)) {
-      raw = data;
-    } else {
-      // Walk top-level keys looking for the first array
+    let raw: any[] = Array.isArray(data) ? data : [];
+    if (!raw.length) {
       for (const key of Object.keys(data)) {
         if (Array.isArray(data[key])) { raw = data[key]; break; }
       }
     }
-
     const parsed = raw.map(normaliseRace).filter(Boolean) as ReturnType<typeof normaliseRace>[];
     if (parsed.length > 0) return parsed;
+  }
+  return [];
+}
+
+// Scan live-feed.json backwards from startId looking for a completed race
+// at the given track. Returns found candidates sorted newest-first.
+async function scanBackwardsForRace(
+  series: number,
+  trackKeyword: string,
+  startId: number
+): Promise<{ raceId: number; trackName: string; raceDate: string; runType: number }[]> {
+  const SCAN_BACK = 220;
+  const BATCH = 30;
+
+  for (let offset = 1; offset <= SCAN_BACK; offset += BATCH) {
+    const ids: number[] = [];
+    for (let j = offset; j < offset + BATCH && j <= SCAN_BACK; j++) {
+      ids.push(startId - j);
+    }
+
+    const results = await Promise.all(
+      ids.map(async (id) => {
+        const feed = await fetchJson(
+          `https://cf.nascar.com/cacher/live/series_${series}/${id}/live-feed.json`,
+          3000
+        );
+        if (!feed) return null;
+        const trackName = String(feed.track_name ?? "");
+        if (!trackName.toLowerCase().includes(trackKeyword)) return null;
+        if (feed.flag_state !== 4) return null; // only checkered = completed race
+        const runType = parseInt(String(feed.run_type ?? 3), 10);
+        if (runType !== 3) return null; // races only
+        const raceDate = String(feed.race_date ?? feed.RaceDate ?? "").slice(0, 10);
+        return { raceId: id, trackName, raceDate, runType };
+      })
+    );
+
+    const found = results.filter((r): r is NonNullable<typeof r> => r !== null);
+    if (found.length > 0) {
+      return found.sort((a, b) => b.raceDate.localeCompare(a.raceDate));
+    }
   }
   return [];
 }
@@ -118,11 +147,11 @@ serve(async (req) => {
       }
     }
 
-    // ── Find previous races at this track from schedule ──────────
     const today = new Date().toISOString().slice(0, 10);
     const currentYear = new Date().getFullYear();
-    const trackKeyword = track_name.split(" ")[0].toLowerCase(); // "texas" from "Texas Motor Speedway"
+    const trackKeyword = track_name.split(" ")[0].toLowerCase();
 
+    // ── Strategy 1: NASCAR schedule API ─────────────────────────
     let candidates: NonNullable<ReturnType<typeof normaliseRace>>[] = [];
 
     for (let year = currentYear; year >= currentYear - 2 && candidates.length === 0; year--) {
@@ -130,9 +159,30 @@ serve(async (req) => {
       const matching = schedule
         .filter((r): r is NonNullable<typeof r> => r !== null)
         .filter((r) => r.trackName.toLowerCase().includes(trackKeyword))
-        .filter((r) => r.raceDate < today) // only completed events
-        .filter((r) => r.runType === 3);   // races only (run_type 3)
-      candidates = matching.sort((a, b) => b.raceDate.localeCompare(a.raceDate));
+        .filter((r) => r.raceDate < today)
+        .filter((r) => r.runType === 3);
+      if (matching.length > 0) {
+        candidates = matching.sort((a, b) => b.raceDate.localeCompare(a.raceDate));
+      }
+    }
+
+    // ── Strategy 2: scan backwards from current session race_id ─
+    if (candidates.length === 0) {
+      const { data: recentSessions } = await supabase
+        .from("sessions")
+        .select("race_id")
+        .neq("started_by", "historical")
+        .eq("series", series)
+        .order("started_at", { ascending: false })
+        .limit(1);
+
+      const startId = recentSessions?.[0]?.race_id
+        ? parseInt(String(recentSessions[0].race_id), 10)
+        : null;
+
+      if (startId && !isNaN(startId)) {
+        candidates = await scanBackwardsForRace(series, trackKeyword, startId);
+      }
     }
 
     if (candidates.length === 0) {
@@ -140,7 +190,7 @@ serve(async (req) => {
         JSON.stringify({
           ok: false,
           reason: "no_schedule_data",
-          message: `No completed race found for "${track_name}" in the last 2 seasons. NASCAR schedule API may be unavailable.`,
+          message: `No completed race found for "${track_name}". Try again after the current race finishes.`,
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
@@ -153,7 +203,9 @@ serve(async (req) => {
     for (const race of candidates.slice(0, 5)) {
       const lapUrl = `https://cf.nascar.com/cacher/live/series_${series}/${race.raceId}/lap-times.json`;
       const data = await fetchJson(lapUrl);
-      if (data && Array.isArray(data.laps) && data.laps.length > 0) {
+      // Handle both laps (Cup) and Laps (Truck/Xfinity) variants
+      const arr = data?.laps ?? data?.Laps;
+      if (data && Array.isArray(arr) && arr.length > 0) {
         lapData = data;
         pickedRace = race;
         break;
@@ -165,7 +217,7 @@ serve(async (req) => {
         JSON.stringify({
           ok: false,
           reason: "no_lap_data",
-          message: `Found schedule entries for "${track_name}" but lap data is not available yet.`,
+          message: `Found a previous race at "${track_name}" but lap data is not available.`,
           candidates: candidates.slice(0, 3).map((r) => ({ race_id: r.raceId, date: r.raceDate })),
         }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -190,8 +242,8 @@ serve(async (req) => {
 
     if (sErr) throw sErr;
 
-    // ── Import drivers and laps (same format as poll-nascar) ─────
-    const driversArr: any[] = lapData.laps ?? [];
+    // ── Import drivers and laps (handles PascalCase + camelCase) ─
+    const driversArr: any[] = lapData.laps ?? lapData.Laps ?? [];
     const driverRows: any[] = [];
     const lapRows: any[] = [];
 
@@ -210,9 +262,9 @@ serve(async (req) => {
         last_name: lastName,
       });
 
-      for (const lap of (d.Laps ?? [])) {
-        const lapNumber = lap.Lap;
-        const lapTime = lap.LapTime;
+      for (const lap of (d.Laps ?? d.laps ?? [])) {
+        const lapNumber = lap.Lap ?? lap.lap;
+        const lapTime = lap.LapTime ?? lap.lapTime ?? lap.lap_time;
         if (lapNumber == null || lapTime == null || lapTime <= 0) continue;
         lapRows.push({ session_id: sessionRow.id, driver_key: driverKey, lap_number: lapNumber, lap_time: lapTime });
       }
