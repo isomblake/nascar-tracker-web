@@ -88,6 +88,7 @@ async function processLapTimes(
           FullName: v.driver?.FullName ?? v.FullName ?? v.driver?.full_name ?? "",
           Laps: synthLaps,
           running_position: v.running_position ?? v.RunningPos,
+          practice_group: v.practice_group ?? v.PracticeGroup ?? null,
         };
       });
   }
@@ -112,13 +113,14 @@ async function processLapTimes(
         car_number: carNumber,
         full_name: fullName,
         last_name: lastName,
+        practice_group: d.practice_group ?? null,
       });
 
       // Handle both "Laps" (PascalCase) and "laps" (camelCase)
       const laps = d.Laps ?? d.laps ?? [];
       for (const lap of laps) {
-        // Handle PascalCase (Lap/LapTime/RunningPos) and camelCase (lap/lapTime/running_pos)
-        const lapNumber = lap.Lap ?? lap.lap;
+        // Handle PascalCase (Lap/LapTime/RunningPos), camelCase (lap/lapTime/running_pos), snake_case (lap_number)
+        const lapNumber = lap.Lap ?? lap.lap ?? lap.lap_number;
         const lapTime = lap.LapTime ?? lap.lapTime ?? lap.lap_time;
         if (lapNumber == null || lapTime == null || lapTime <= 0) continue;
         lapRows.push({
@@ -143,7 +145,7 @@ async function processLapTimes(
     if (driverRows.length > 0) {
       await supabase
         .from("drivers")
-        .upsert(driverRows, { onConflict: "session_id,driver_key", ignoreDuplicates: true });
+        .upsert(driverRows, { onConflict: "session_id,driver_key" });
     }
 
     if (lapRows.length > 0) {
