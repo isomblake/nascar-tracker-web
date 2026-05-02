@@ -576,11 +576,10 @@ export default function App() {
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          <SessionControl session={session} dark={dark} onAfterAction={live.reload} compact />
           {["Race", "Practice", "History"].map((m) => (
             <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 52, height: 40, padding: "0 10px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
           ))}
-          <button onClick={() => setDark(!dark)} aria-label="Toggle theme" style={{ width: 40, height: 40, borderRadius: 6, background: "transparent", border: `1px solid ${bdr}`, color: fg, cursor: "pointer", fontSize: 16 }}>{dark ? "☀" : "☾"}</button>
+          <SessionControl session={session} dark={dark} onAfterAction={live.reload} compact />
           <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 40, height: 40, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
         </div>
       </div>
@@ -589,6 +588,10 @@ export default function App() {
       {showSettings && (
         <div style={{ padding: 14, margin: "8px 12px", background: card, border: `1px solid ${bdr}`, borderRadius: 10 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: sub, marginBottom: 10 }}>SETTINGS</div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 10, color: sub }}>Theme</div>
+            <button onClick={() => setDark(!dark)} style={{ padding: "4px 12px", borderRadius: 4, background: "transparent", color: fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{dark ? "☀ Light" : "☾ Dark"}</button>
+          </div>
           <div style={{ marginBottom: 12 }}>
             <div style={{ fontSize: 10, color: sub, marginBottom: 4 }}>Primary Driver</div>
             <select value={primaryResolved} onChange={(e) => setPrimary(e.target.value)} style={{ width: "100%", padding: 6, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 4, fontSize: 12 }}>
