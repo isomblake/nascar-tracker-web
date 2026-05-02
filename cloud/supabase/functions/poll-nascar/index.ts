@@ -56,25 +56,40 @@ async function processLapTimes(
   if (driversArr.length === 0 && lapData && typeof lapData === "object") {
     for (const key of Object.keys(lapData)) {
       const val = lapData[key];
-      if (Array.isArray(val) && val.length > 0 && val[0]?.NASCARDriverID != null) {
-        driversArr = val;
-        break;
+      if (Array.isArray(val) && val.length > 0) {
+        const first = val[0];
+        if (first?.NASCARDriverID != null || first?.vehicle_number != null || first?.Number != null) {
+          driversArr = val;
+          break;
+        }
       }
     }
   }
 
   // 2. Fallback: live-feed.json vehicles array (practice sessions often only populate here).
-  //    Normalise vehicle fields to match the lap-times.json shape so the same
-  //    insertion code below handles both sources.
+  //    During practice the CDN may only serve live-feed.json with per-vehicle state
+  //    (laps_completed + last_lap_time) rather than a full lap-by-lap array.
+  //    We synthesise a single lap record per driver per poll using laps_completed as
+  //    the lap number — upsert deduplication means repeated polls for the same lap are
+  //    ignored and new laps accumulate naturally.
   if (driversArr.length === 0) {
     const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
-    driversArr = vehicles.map((v: any) => ({
-      NASCARDriverID: v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.vehicle_number,
-      Number: v.vehicle_number ?? v.Number,
-      FullName: v.driver?.FullName ?? v.FullName ?? v.driver?.full_name ?? "",
-      Laps: v.laps ?? v.Laps ?? [],
-      running_position: v.running_position ?? v.RunningPos,
-    }));
+    driversArr = vehicles
+      .filter((v: any) => v.laps_completed != null || (v.laps ?? v.Laps)?.length > 0)
+      .map((v: any) => {
+        const existingLaps = v.laps ?? v.Laps ?? [];
+        // If no laps array, synthesise one entry from aggregate fields
+        const synthLaps = existingLaps.length === 0 && v.laps_completed != null && v.last_lap_time != null && v.last_lap_time > 0
+          ? [{ Lap: v.laps_completed, LapTime: v.last_lap_time }]
+          : existingLaps;
+        return {
+          NASCARDriverID: v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.vehicle_number,
+          Number: v.vehicle_number ?? v.Number,
+          FullName: v.driver?.FullName ?? v.FullName ?? v.driver?.full_name ?? "",
+          Laps: synthLaps,
+          running_position: v.running_position ?? v.RunningPos,
+        };
+      });
   }
 
   let newLaps = 0;
