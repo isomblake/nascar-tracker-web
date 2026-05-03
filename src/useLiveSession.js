@@ -243,10 +243,14 @@ export function useLiveSession() {
       const sessId = session.id;
 
       try {
-        // Fetch only laps beyond the max we've seen (incremental)
+        // Fetch laps beyond a buffered floor. Using global maxLap directly would
+        // strand drivers who lag behind the leader — if any driver gets lap N+1
+        // written first, maxLap jumps and the query skips lap N+1 for others.
+        // Re-checking the last 20 laps on every poll catches any stragglers.
         const maxLap = rawLaps.length > 0
           ? Math.max(...rawLaps.map((r) => r.lap_number))
           : 0;
+        const fetchFrom = Math.max(0, maxLap - 20);
 
         // Fetch new laps (paginated)
         let newLaps = [];
@@ -257,7 +261,7 @@ export function useLiveSession() {
             .from('laps')
             .select('driver_key, lap_number, lap_time')
             .eq('session_id', sessId)
-            .gt('lap_number', maxLap)
+            .gt('lap_number', fetchFrom)
             .order('lap_number', { ascending: true })
             .range(from, from + PAGE - 1);
           if (!chunk || chunk.length === 0) break;
