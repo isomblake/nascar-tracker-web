@@ -148,6 +148,25 @@ async function processLapTimes(
         .upsert(driverRows, { onConflict: "session_id,driver_key" });
     }
 
+    // Supplement lap-times.json with live-feed per-vehicle data every poll.
+    // lap-times.json CDN can lag 1-4 laps; live-feed last_lap_time updates
+    // each lap in real-time, closing gaps that the historical file misses.
+    const liveVehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
+    for (const v of liveVehicles) {
+      const driverKey = String(v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.vehicle_number ?? "");
+      if (!driverKey) continue;
+      const lapsCompleted = v.laps_completed ?? v.LapsCompleted;
+      const lastLapTime = v.last_lap_time ?? v.LastLapTime;
+      if (lapsCompleted != null && lastLapTime != null && lastLapTime > 0) {
+        lapRows.push({
+          session_id: session.id,
+          driver_key: driverKey,
+          lap_number: lapsCompleted,
+          lap_time: lastLapTime,
+        });
+      }
+    }
+
     if (lapRows.length > 0) {
       const CHUNK = 500;
       for (let i = 0; i < lapRows.length; i += CHUNK) {
