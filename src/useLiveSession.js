@@ -133,8 +133,9 @@ export function useLiveSession() {
       if (sErr) throw sErr;
 
       if (!sessions || sessions.length === 0) {
-        // No active session — fall back to most recent live-originated session
-        // (exclude historical imports so they don't hijack the header display)
+        // No active session — load the most recent live-originated session so
+        // analytics stay visible between race weekends. The CHECKERED flag in
+        // the header tells the user the session is completed, not live.
         const { data: recent } = await supabase
           .from('sessions')
           .select('*')
@@ -147,12 +148,38 @@ export function useLiveSession() {
           return;
         }
         setSession(recent[0]);
-      } else {
-        setSession(sessions[0]);
+
+        // Load drivers, laps, positions for the completed session
+        const recentId = recent[0].id;
+        const { data: drvs } = await supabase
+          .from('drivers').select('*').eq('session_id', recentId);
+        setDrivers(drvs || []);
+
+        let lapsAll = [];
+        let lFrom = 0;
+        while (true) {
+          const { data: chunk } = await supabase
+            .from('laps').select('driver_key, lap_number, lap_time')
+            .eq('session_id', recentId)
+            .order('lap_number', { ascending: true })
+            .range(lFrom, lFrom + 999);
+          if (!chunk || chunk.length === 0) break;
+          lapsAll = lapsAll.concat(chunk);
+          if (chunk.length < 1000) break;
+          lFrom += 1000;
+        }
+        setRawLaps(lapsAll);
+
+        const { data: pos } = await supabase
+          .from('positions').select('driver_key, position').eq('session_id', recentId);
+        setRawPositions(pos || []);
+        setStatus('no_session');
+        setError(null);
+        return;
       }
 
-      const activeId = (sessions && sessions[0]?.id) || null;
-      if (!activeId) { setStatus('no_session'); return; }
+      setSession(sessions[0]);
+      const activeId = sessions[0].id;
 
       // 2. Load drivers
       const { data: drvs } = await supabase
@@ -210,9 +237,9 @@ export function useLiveSession() {
   useEffect(() => {
     let cancelled = false;
 
-    // Incremental lap/position poll — only for the active session
+    // Incremental lap/position poll — only while a session is actively running
     const pollActiveData = async () => {
-      if (!session?.id || cancelled) return;
+      if (!session?.id || !session?.is_active || cancelled) return;
       const sessId = session.id;
 
       try {
@@ -287,9 +314,10 @@ export function useLiveSession() {
           .limit(1);
         const newActiveId = sessions?.[0]?.id ?? null;
         const currentId = session?.id ?? null;
-        const currentActive = session?.is_active === true;
-        // Reload if: active session appeared, changed to different one, or went inactive
-        if (newActiveId !== currentId || (currentId && !currentActive && newActiveId)) {
+        // Reload only when a new/different active session appears.
+        // Do NOT reload just because there's no active session — that causes an
+        // infinite loadAll() loop every 15s when viewing completed session data.
+        if (newActiveId != null && newActiveId !== currentId) {
           if (!cancelled) loadAll();
         }
       } catch (e) {

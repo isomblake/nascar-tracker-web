@@ -601,6 +601,9 @@ export default function App() {
               if (!lbl) return null;
               return <span style={{ color: flagColor[fs] || sub, marginLeft: 6 }}>{lbl}</span>;
             })()}
+            {status === 'no_session' && NAMES.length > 0 && (
+              <span style={{ marginLeft: 6, color: sub }}>· REPLAY</span>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
