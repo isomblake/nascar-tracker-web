@@ -109,11 +109,15 @@ async function scanBackwardsForRun(
         if (!trackName.toLowerCase().includes(trackKeyword)) return null;
 
         const runType = parseInt(String(feed.run_type ?? feed.RunType ?? 3), 10);
-        if (runType !== targetRunType) return null;
+        // NASCAR uses run_type 1 for all practice sessions (P1 and Final/P2 alike).
+        // Accept either when looking for any practice type.
+        const isPracticeTarget = targetRunType === 1 || targetRunType === 2;
+        if (isPracticeTarget ? (runType !== 1 && runType !== 2) : runType !== targetRunType) return null;
 
         const raceDate = String(feed.race_date ?? feed.RaceDate ?? feed.start_date ?? "").slice(0, 10);
         if (!raceDate || raceDate.length < 10) return null;
-        if (raceDate >= today) return null;
+        // Use <= (not <) so practice sessions stored with the race weekend date (today) are included.
+        if (raceDate > today) return null;
 
         return { raceId: id, trackName, raceDate, runType };
       })
@@ -187,7 +191,7 @@ serve(async (req) => {
       const matching = schedule
         .filter((r): r is NonNullable<typeof r> => r !== null)
         .filter((r) => r.trackName.toLowerCase().includes(trackKeyword))
-        .filter((r) => r.raceDate < today)
+        .filter((r) => r.raceDate <= today)
         .filter((r) => r.runType === run_type);
       candidates = matching.sort((a, b) => b.raceDate.localeCompare(a.raceDate));
     }
