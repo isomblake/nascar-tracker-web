@@ -91,9 +91,11 @@ async function scanBackwardsForRun(
   const SCAN_BACK = 400;
   const BATCH = 60;
 
-  for (let offset = 1; offset <= SCAN_BACK; offset += BATCH) {
+  // offset starts at 0 so startId itself is included in the first batch —
+  // the most recent DB session may BE the session we're looking for.
+  for (let offset = 0; offset < SCAN_BACK; offset += BATCH) {
     const ids: number[] = [];
-    for (let j = offset; j < offset + BATCH && j <= SCAN_BACK; j++) {
+    for (let j = offset; j < offset + BATCH && j < SCAN_BACK; j++) {
       ids.push(startId - j);
     }
 
