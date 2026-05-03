@@ -314,21 +314,24 @@ export default function App() {
       return;
     }
 
+    const seriesFilter = session?.series ?? 1;
     (async () => {
       try {
-        const { data } = await supabase
+        const { data, error } = await supabase
           .from('sessions')
           .select('id')
           .neq('started_by', 'historical')
           .in('session_type', ['practice1', 'practice2'])
+          .eq('series', seriesFilter)
           .order('started_at', { ascending: false })
           .limit(1);
+        if (error) { console.error('practice auto-load:', error); return; }
         if (!cancelled && data?.[0]?.id) setPractHistSessionId(data[0].id);
-      } catch {}
+      } catch (e) { console.error('practice auto-load:', e); }
     })();
 
     return () => { cancelled = true; };
-  }, [session?.id, session?.is_active, session?.session_type]);
+  }, [session?.id, session?.is_active, session?.session_type, session?.series]);
 
   const [tab, setTab] = useState(0);
   const [primary, setPrimary] = useState("Brad Keselowski");
