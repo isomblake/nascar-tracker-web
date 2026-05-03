@@ -346,7 +346,7 @@ export function useLiveSession() {
 // A single driver pitting/spinning does NOT affect the field median.
 // ═══════════════════════════════════════════════════════════════════
 const CAUTION_MULT_THRESHOLD = 1.20;  // field median this much above baseline = caution
-const MIN_DRIVERS_FOR_CAUTION = 5;    // need enough cars reporting
+const MIN_DRIVERS_FOR_CAUTION = 3;    // need enough cars reporting
 
 function detectCautionLaps(rawLaps) {
   // rawLaps: [{driver_key, lap_number, lap_time}]
@@ -427,13 +427,16 @@ function detectCautionLaps(rawLaps) {
       LAPS[dispName] = stats.laps;
       STINT[dispName] = stats.stint;
 
-      // Find last pit lap: highest lap where raw time > best + 5 (ignore cautions)
+      // Find last pit lap: highest lap where time exceeds pit threshold.
+      // Use best+20 (not the general +5 stint margin) so caution laps that slip
+      // through cautionSet detection don't register as pit stops. Pit stops are
+      // always 30-50s above best; caution laps are typically only 8-15s above.
       const bestL = stats.best.best;
-      const thr = (bestL != null && bestL > 0) ? bestL + 5 : ABSOLUTE_MAX_LAP;
+      const pitThr = (bestL != null && bestL > 0) ? bestL + 20 : ABSOLUTE_MAX_LAP;
       let lastPitLap = null;
       for (let i = stats.laps.length - 1; i >= 0; i--) {
         const [n, t] = stats.laps[i];
-        if (t > thr && !cautionSet.has(n)) { lastPitLap = n; break; }
+        if (t > pitThr && !cautionSet.has(n)) { lastPitLap = n; break; }
       }
       LAST_PIT[dispName] = lastPitLap;
 
