@@ -254,6 +254,16 @@ export function useLiveSession() {
           .eq('session_id', sessId);
         if (!cancelled && pos) setRawPositions(pos);
 
+        // Re-fetch drivers if missing — happens when START is tapped before
+        // poll-nascar's first write (fire-and-forget takes 2-5s).
+        if (drivers.length === 0) {
+          const { data: drvs } = await supabase
+            .from('drivers')
+            .select('*')
+            .eq('session_id', sessId);
+          if (!cancelled && drvs?.length > 0) setDrivers(drvs);
+        }
+
         // Also refresh session row (for flag_state, current_lap, etc.)
         const { data: sess } = await supabase
           .from('sessions')
