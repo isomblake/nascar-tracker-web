@@ -1,8 +1,9 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useLiveSession } from "./useLiveSession";
 import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
+import { supabase } from "./supabaseClient";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -299,6 +300,36 @@ export default function App() {
   const [practHistLoading, setPractHistLoading] = useState(false);
   const [practHistError, setPractHistError] = useState(null);
   const practHist = useHistorySession(practHistSessionId);
+
+  // Auto-persist last practice session in the Practice tab.
+  // Clears when a live practice starts (show live data), reloads after it ends.
+  // Race and qualifying sessions leave practHistSessionId untouched.
+  useEffect(() => {
+    let cancelled = false;
+    const isLivePractice = session?.is_active &&
+      (session?.session_type === 'practice1' || session?.session_type === 'practice2');
+
+    if (isLivePractice) {
+      setPractHistSessionId(null);
+      return;
+    }
+
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from('sessions')
+          .select('id')
+          .neq('started_by', 'historical')
+          .in('session_type', ['practice1', 'practice2'])
+          .order('started_at', { ascending: false })
+          .limit(1);
+        if (!cancelled && data?.[0]?.id) setPractHistSessionId(data[0].id);
+      } catch {}
+    })();
+
+    return () => { cancelled = true; };
+  }, [session?.id, session?.is_active, session?.session_type]);
+
   const [tab, setTab] = useState(0);
   const [primary, setPrimary] = useState("Brad Keselowski");
   const [compDrivers, setCompDrivers] = useState([]);
