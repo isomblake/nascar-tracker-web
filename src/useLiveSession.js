@@ -333,7 +333,7 @@ export function useLiveSession() {
       clearInterval(dataInterval);
       clearInterval(discoveryInterval);
     };
-  }, [session?.id, session?.is_active, rawLaps, loadAll]);
+  }, [session?.id, session?.is_active, rawLaps, loadAll, drivers.length]);
 
 // ═══════════════════════════════════════════════════════════════════
 // Field-wide caution detection:

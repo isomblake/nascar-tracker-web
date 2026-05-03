@@ -389,7 +389,7 @@ export default function App() {
     );
   }
 
-  const HH = 60, MTH = 44, TH = 44, ST = HH + MTH + TH;
+  const HH = 60, MTH = 44, TH = 44;
 
   /* ─── Comparison card for race mode ─── */
   const RaceComp = ({ label, emoji, name, borderColor, isBehind }) => {
@@ -502,7 +502,7 @@ export default function App() {
             {hasCumGap ? (
               <>
                 <div style={{ fontSize: 9, color: sub }}>GAP</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: fg, ...MF, lineHeight: 1.1 }}>{Math.abs(cumulativeGap).toFixed(2)}s</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: cumGapColor, ...MF, lineHeight: 1.1 }}>{Math.abs(cumulativeGap).toFixed(2)}s</div>
                 <div style={{ fontSize: 9, color: sub, marginTop: 3 }}>last lap</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
               </>
