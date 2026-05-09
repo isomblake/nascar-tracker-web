@@ -289,6 +289,14 @@ export default function App() {
   const [dark, setDark] = useState(true);
   const [mode, setMode] = useState("race");
 
+  // Auto-switch to Practice tab when a practice session goes live
+  useEffect(() => {
+    if (session?.is_active &&
+        (session?.session_type === 'practice1' || session?.session_type === 'practice2')) {
+      setMode("practice");
+    }
+  }, [session?.id, session?.is_active, session?.session_type]);
+
   // ── History state ──────────────────────────────────────────────
   const [historySessionId, setHistorySessionId] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -682,7 +690,16 @@ export default function App() {
       )}
 
       {/* ═══ RACE ═══ */}
-      {mode === "race" && (
+      {mode === "race" && (session?.session_type === 'practice1' || session?.session_type === 'practice2') && (
+        <div style={{ padding: "40px 20px", textAlign: "center", color: sub, fontSize: 13 }}>
+          Practice session is active —
+          <button onClick={() => setMode("practice")} style={{ marginLeft: 6, color: acc, background: "none", border: "none", fontSize: 13, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}>
+            go to Practice tab
+          </button>
+        </div>
+      )}
+
+      {mode === "race" && session?.session_type !== 'practice1' && session?.session_type !== 'practice2' && (
         <>
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
             {["Dashboard", "Full Field", "Chart"].map((t, i) => (
