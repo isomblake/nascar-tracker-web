@@ -113,7 +113,7 @@ async function processLapTimes(
         car_number: carNumber,
         full_name: fullName,
         last_name: lastName,
-        practice_group: d.practice_group ?? null,
+        practice_group: d.practice_group ?? d.PracticeGroup ?? null,
       });
 
       // Handle both "Laps" (PascalCase) and "laps" (camelCase)
