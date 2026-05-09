@@ -444,7 +444,7 @@ function detectCautionLaps(rawLaps) {
       let lastLapTime = null;
       for (let i = stats.laps.length - 1; i >= 0; i--) {
         const [n, t] = stats.laps[i];
-        if (t > 0 && t <= thr && !cautionSet.has(n)) { lastLapTime = t; break; }
+        if (t > 0 && t <= pitThr && !cautionSet.has(n)) { lastLapTime = t; break; }
       }
       LAST_LAP_TIME[dispName] = lastLapTime;
 
