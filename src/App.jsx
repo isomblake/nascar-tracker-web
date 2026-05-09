@@ -1,8 +1,9 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useLiveSession } from "./useLiveSession";
 import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
+import { supabase } from "./supabaseClient";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -288,6 +289,14 @@ export default function App() {
   const [dark, setDark] = useState(true);
   const [mode, setMode] = useState("race");
 
+  // Auto-switch to Practice tab when a practice session goes live
+  useEffect(() => {
+    if (session?.is_active &&
+        (session?.session_type === 'practice1' || session?.session_type === 'practice2')) {
+      setMode("practice");
+    }
+  }, [session?.id, session?.is_active, session?.session_type]);
+
   // ── History state ──────────────────────────────────────────────
   const [historySessionId, setHistorySessionId] = useState(null);
   const [historyLoading, setHistoryLoading] = useState(false);
@@ -299,6 +308,39 @@ export default function App() {
   const [practHistLoading, setPractHistLoading] = useState(false);
   const [practHistError, setPractHistError] = useState(null);
   const practHist = useHistorySession(practHistSessionId);
+
+  // Auto-persist last practice session in the Practice tab.
+  // Clears when a live practice starts (show live data), reloads after it ends.
+  // Race and qualifying sessions leave practHistSessionId untouched.
+  useEffect(() => {
+    let cancelled = false;
+    const isLivePractice = session?.is_active &&
+      (session?.session_type === 'practice1' || session?.session_type === 'practice2');
+
+    if (isLivePractice) {
+      setPractHistSessionId(null);
+      return;
+    }
+
+    const seriesFilter = session?.series ?? 1;
+    (async () => {
+      try {
+        const { data, error } = await supabase
+          .from('sessions')
+          .select('id')
+          .neq('started_by', 'historical')
+          .in('session_type', ['practice1', 'practice2'])
+          .eq('series', seriesFilter)
+          .order('started_at', { ascending: false })
+          .limit(1);
+        if (error) { console.error('practice auto-load:', error); return; }
+        if (!cancelled && data?.[0]?.id) setPractHistSessionId(data[0].id);
+      } catch (e) { console.error('practice auto-load:', e); }
+    })();
+
+    return () => { cancelled = true; };
+  }, [session?.id, session?.is_active, session?.session_type, session?.series]);
+
   const [tab, setTab] = useState(0);
   const [primary, setPrimary] = useState("Brad Keselowski");
   const [compDrivers, setCompDrivers] = useState([]);
@@ -389,7 +431,7 @@ export default function App() {
     );
   }
 
-  const HH = 60, MTH = 44, TH = 44, ST = HH + MTH + TH;
+  const HH = 60, MTH = 44, TH = 44;
 
   /* ─── Comparison card for race mode ─── */
   const RaceComp = ({ label, emoji, name, borderColor, isBehind }) => {
@@ -502,7 +544,7 @@ export default function App() {
             {hasCumGap ? (
               <>
                 <div style={{ fontSize: 9, color: sub }}>GAP</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: fg, ...MF, lineHeight: 1.1 }}>{Math.abs(cumulativeGap).toFixed(2)}s</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: cumGapColor, ...MF, lineHeight: 1.1 }}>{Math.abs(cumulativeGap).toFixed(2)}s</div>
                 <div style={{ fontSize: 9, color: sub, marginTop: 3 }}>last lap</div>
                 <div style={{ fontSize: 13, fontWeight: 700, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
               </>
@@ -601,6 +643,9 @@ export default function App() {
               if (!lbl) return null;
               return <span style={{ color: flagColor[fs] || sub, marginLeft: 6 }}>{lbl}</span>;
             })()}
+            {status === 'no_session' && NAMES.length > 0 && (
+              <span style={{ marginLeft: 6, color: sub }}>· REPLAY</span>
+            )}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
@@ -645,7 +690,16 @@ export default function App() {
       )}
 
       {/* ═══ RACE ═══ */}
-      {mode === "race" && (
+      {mode === "race" && (session?.session_type === 'practice1' || session?.session_type === 'practice2') && (
+        <div style={{ padding: "40px 20px", textAlign: "center", color: sub, fontSize: 13 }}>
+          Practice session is active —
+          <button onClick={() => setMode("practice")} style={{ marginLeft: 6, color: acc, background: "none", border: "none", fontSize: 13, fontWeight: 700, cursor: "pointer", textDecoration: "underline" }}>
+            go to Practice tab
+          </button>
+        </div>
+      )}
+
+      {mode === "race" && session?.session_type !== 'practice1' && session?.session_type !== 'practice2' && (
         <>
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
             {["Dashboard", "Full Field", "Chart"].map((t, i) => (
