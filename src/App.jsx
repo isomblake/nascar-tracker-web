@@ -59,13 +59,13 @@ function StatCell({ label, value, rk, dark }) {
   );
 }
 
-function RankTable({ title, dataset, primary, group, compDrivers, dark, onSetPrimary, onToggleComp, extraW, NAMES, GROUPS, NUM, BEST, showRunLength }) {
+function RankTable({ title, dataset, primary, group, compDrivers, dark, onSetPrimary, onToggleComp, extraW, NAMES, GROUPS, NUM, BEST, showRunLength, defaultSort = "t10" }) {
   const bdr = dark ? "#1e1e3a" : "#e0e0e0";
   const fg = dark ? "#e0e0e0" : "#1a1a1a";
   const sub = dark ? "#555" : "#999";
   const acc = "#2563eb";
   const bgc = dark ? "#08081a" : "#f8f8fa";
-  const [sortCol, setSortCol] = useState("t10");
+  const [sortCol, setSortCol] = useState(defaultSort);
   const lastKey = extraW ? "t" + extraW : "t30";
   const lastLabel = extraW ? extraW + "L" : "30L";
   const cols = [
@@ -1005,10 +1005,10 @@ export default function App() {
               </div>
 
               <div style={{ marginTop: 16 }}>
-                <RankTable title="BEST WINDOW RANKINGS" dataset={pB} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} />
+                <RankTable title="BEST WINDOW RANKINGS" dataset={pB} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} defaultSort="best" />
               </div>
 
-              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={pE} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} showRunLength />
+              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={pE} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} showRunLength defaultSort="best" />
 
               <FalloffCard primary={pPri} compDrivers={compDrivers} dark={dark} BEST={pB} EOR={pE} NUM={pN} />
 
