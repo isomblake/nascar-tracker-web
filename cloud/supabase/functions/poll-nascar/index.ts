@@ -256,13 +256,13 @@ serve(async (req) => {
       }
 
       // Auto-stop when session goes cold (practice/qualifying ended, or stale session).
-      // Two conditions cover both cases:
+      // Not applied to races — the All Star Race and others have inter-segment breaks
+      // where flag_state briefly hits 9 (cold). Races stop only on FLAG_CHECKERED.
+      // Two conditions cover practice/qualifying:
       //   totalSeen > 0 — session ran normally and data stopped coming in
       //   polls >= 2    — stale/empty session that was never live (no-data guard)
-      // detect-session only creates sessions in live states (flag 1/2/8), so seeing
-      // FLAG_COLD for 2+ polls means the session is genuinely over.
       const totalSeen = (session.total_laps_seen ?? 0) + totalNewLaps;
-      if (liveData?.flag_state === FLAG_COLD && (totalSeen > 0 || polls >= 2)) {
+      if (session.session_type !== 'race' && liveData?.flag_state === FLAG_COLD && (totalSeen > 0 || polls >= 2)) {
         await supabase
           .from("sessions")
           .update({ is_active: false, flag_state: FLAG_COLD })
