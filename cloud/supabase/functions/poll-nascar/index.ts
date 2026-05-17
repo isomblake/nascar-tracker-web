@@ -178,7 +178,15 @@ async function processLapTimes(
   };
   if (liveData) {
     if (liveData.flag_state != null) sessionUpdate.flag_state = liveData.flag_state;
-    if (liveData.lap_number != null) sessionUpdate.current_lap = liveData.lap_number;
+    if (liveData.lap_number != null) {
+      sessionUpdate.current_lap = liveData.lap_number;
+    } else {
+      // Fallback: derive from max laps_completed across vehicles (handles inter-segment gaps
+      // in the All Star Race where lap_number goes null but vehicle data keeps updating).
+      const vehicles: any[] = liveData.vehicles ?? liveData.Vehicles ?? [];
+      const maxLap = vehicles.reduce((m: number, v: any) => Math.max(m, v.laps_completed ?? 0), 0);
+      if (maxLap > 0) sessionUpdate.current_lap = maxLap;
+    }
     if (liveData.laps_in_race != null) sessionUpdate.laps_in_race = liveData.laps_in_race;
     if (liveData.laps_to_go != null) sessionUpdate.laps_to_go = liveData.laps_to_go;
     if (liveData.stage != null) sessionUpdate.stage = liveData.stage;
