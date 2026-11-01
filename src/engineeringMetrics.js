@@ -137,7 +137,7 @@ export function isTireChangePitStop(stop) {
   if (flags.some(Boolean)) return true;
   if (flags.length === keys.length) return false;
   const type = String(details.pit_stop_type ?? details.stop_type ?? "").toUpperCase();
-  return type.includes("TIRE_CHANGE");
+  return type.includes("TIRE_CHANGE") || type.includes("WHEEL_CHANGE");
 }
 
 export function buildDriverRunAnalysis(laps, options = {}) {
