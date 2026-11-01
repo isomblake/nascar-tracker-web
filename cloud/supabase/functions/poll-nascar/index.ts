@@ -140,10 +140,24 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
     const lastLap = laps[laps.length - 1];
     const position = topPosition ?? lastLap?.RunningPos ?? lastLap?.running_pos ?? lastLap?.runningPos;
     if (position != null) {
-      const changedTires = lastPit
-        ? ["left_front_tire_changed", "left_rear_tire_changed", "right_front_tire_changed", "right_rear_tire_changed"]
-            .filter((key) => lastPit[key] === true).length
-        : null;
+      const tireChangeKeys = ["left_front_tire_changed", "left_rear_tire_changed", "right_front_tire_changed", "right_rear_tire_changed"];
+      const tireFlags = lastPit ? tireChangeKeys.map((key) => lastPit[key]).filter((value) => typeof value === "boolean") : [];
+      const pitType = String(lastPit?.pit_stop_type ?? lastPit?.stop_type ?? "").toUpperCase();
+      const changedTires = !lastPit
+        ? null
+        : tireFlags.length
+          ? tireFlags.filter(Boolean).length
+          : pitType.includes("FOUR_WHEEL_CHANGE")
+            ? 4
+            : pitType.includes("TWO_WHEEL_CHANGE")
+              ? 2
+              : null;
+      const pitInElapsed = numberOrNull(lastPit?.pit_in_elapsed_time);
+      const pitOutElapsed = numberOrNull(lastPit?.pit_out_elapsed_time);
+      const pitRoadDuration = numberOrNull(lastPit?.total_duration) ??
+        (pitInElapsed != null && pitOutElapsed != null && pitOutElapsed >= pitInElapsed
+          ? pitOutElapsed - pitInElapsed
+          : null);
       positionRows.set(driverKey, {
         session_id: session.id,
         driver_key: driverKey,
@@ -157,7 +171,7 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
         average_speed: numberOrNull(vehicle.average_speed),
         pit_stops_count: pitStops.length,
         last_pit_lap: lastPit ? Number(lastPit.pit_in_lap_count ?? lastPit.pit_in_leader_lap ?? 0) || null : null,
-        last_pit_total_duration: lastPit && Number.isFinite(Number(lastPit.total_duration)) ? Number(lastPit.total_duration) : null,
+        last_pit_total_duration: pitRoadDuration,
         last_pit_box_duration: lastPit && Number.isFinite(Number(lastPit.pit_stop_duration ?? lastPit.box_stop_duration)) ? Number(lastPit.pit_stop_duration ?? lastPit.box_stop_duration) : null,
         last_pit_tire_count: changedTires,
         last_pit_positions_gained: lastPit && Number.isFinite(Number(lastPit.positions_gained ?? lastPit.positions_gained_lossed)) ? Number(lastPit.positions_gained ?? lastPit.positions_gained_lossed) : null,
