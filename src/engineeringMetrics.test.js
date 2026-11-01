@@ -61,7 +61,7 @@ describe("engineeringMetrics", () => {
     expect(formatOfficialLeaderGap(
       { laps_completed: 443, delta_leader: 1.346 },
       { laps_completed: 443, delta_leader: 0 }
-    )).toEqual({ label: "1.35s", type: "seconds", value: 1.346 });
+    )).toEqual({ label: "1.35s", type: "seconds", value: 1.346, timeGapSeconds: 1.346 });
     expect(formatOfficialLeaderGap(
       { laps_completed: 440, delta_leader: -3, vehicle_elapsed_time: 10238.595 },
       { laps_completed: 443, delta_leader: 0, vehicle_elapsed_time: 10173.195 }
