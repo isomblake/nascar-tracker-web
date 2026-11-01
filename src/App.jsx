@@ -5,7 +5,7 @@ import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
-import { compareRunsByTireAge, summarizeRun, compareOfficialTiming } from "./engineeringMetrics";
+import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -924,6 +924,8 @@ export default function App() {
             const selectedPitStops = PIT_STOPS[primaryResolved] || [];
             const latestPit = selectedPitStops[selectedPitStops.length - 1] || null;
             const officialLeaderGap = selectedTiming.delta_leader != null ? Number(selectedTiming.delta_leader) : null;
+            const battleDriver = compDrivers.find((name) => name !== primaryResolved) || "";
+            const lapBattle = battleDriver ? compareLapByLap(LAPS[primaryResolved] || [], LAPS[battleDriver] || []) : null;
             const metricCard = (label, value, detail) => (
               <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, minWidth: 0 }}>
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, letterSpacing: 0.7 }}>{label}</div>
@@ -989,6 +991,37 @@ export default function App() {
                       <span style={{fontSize:11,...MF,color:deltaColor(t.paceDelta5)}}>{t.paceDelta5==null?"—":deltaText(t.paceDelta5)+"/lap"}</span>
                     </div>;
                   }) : <div style={{fontSize:11,color:sub}}>Select comparison drivers from the Cockpit or Full Field view to populate this section.</div>}
+                </div>
+                <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800 }}>LAP-BY-LAP COMPARISON</div>
+                    <div style={{ fontSize: 9, color: sub }}>{battleDriver ? "vs " + battleDriver : "Select a comparison driver"}</div>
+                  </div>
+                  {lapBattle?.rows?.length ? (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 9, ...MF }}>
+                        <thead><tr style={{ color: sub, textAlign: "right" }}>
+                          <th style={{ textAlign: "left", padding: "5px 3px" }}>LAP</th>
+                          <th style={{ padding: "5px 3px" }}>YOU</th>
+                          <th style={{ padding: "5px 3px" }}>THEM</th>
+                          <th style={{ padding: "5px 3px" }}>DELTA</th>
+                          <th style={{ padding: "5px 3px" }}>RUNNING Δ</th>
+                        </tr></thead>
+                        <tbody>
+                          {lapBattle.rows.slice(-10).map((row) => (
+                            <tr key={row.lap} style={{ borderTop: `1px solid ${bdr}`, textAlign: "right" }}>
+                              <td style={{ textAlign: "left", padding: "6px 3px", color: sub }}>L{row.lap}</td>
+                              <td style={{ padding: "6px 3px" }}>{row.primaryTime.toFixed(3)}</td>
+                              <td style={{ padding: "6px 3px" }}>{row.competitorTime.toFixed(3)}</td>
+                              <td style={{ padding: "6px 3px", color: deltaColor(row.lapDeltaSeconds) }}>{row.lapDeltaSeconds > 0 ? "+" : ""}{row.lapDeltaSeconds.toFixed(3)}</td>
+                              <td style={{ padding: "6px 3px", color: deltaColor(row.cumulativeDeltaSeconds) }}>{row.cumulativeDeltaSeconds > 0 ? "+" : ""}{row.cumulativeDeltaSeconds.toFixed(3)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <div style={{ fontSize: 10, color: sub }}>No matched lap history for the selected comparison.</div>}
+                  <div style={{ fontSize: 8, color: sub, marginTop: 6 }}>Negative delta means the selected driver was faster on that lap. Running Δ is the sum of lap-time differences over the displayed common-lap history; it is not the official on-track interval.</div>
                 </div>
                 <div style={{fontSize:9,color:sub,lineHeight:1.5,marginTop:10}}>
                   Method: pace rank and field median use each driver's current-stint 10-lap average. Last-5 trend compares the latest five clean laps with the five immediately before them. Pit and detected caution laps are excluded. These are descriptive indicators, not a tire-wear or finishing-position prediction model.
