@@ -294,6 +294,7 @@ function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggle
 function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, EOR, STINT, primary, onSelectDriver, dark, status }) {
   const [demoMode, setDemoMode] = useState(false);
   const [demoScenario, setDemoScenario] = useState("3 laps down");
+  const [demoSelectedDriver, setDemoSelectedDriver] = useState("Brad Keselowski");
   const demoNames = ["Kyle Larson", "William Byron", "Denny Hamlin", "Ryan Blaney", "Brad Keselowski", "Chase Elliott"];
   const demoLapsDown = demoScenario === "1 lap down" ? 1 : demoScenario === "2 laps down" ? 2 : demoScenario === "on lead lap" ? 0 : 3;
   const demoPace = demoScenario === "gaining" ? 29.4 : demoScenario === "on lead lap" ? 29.8 : 30.2;
@@ -314,7 +315,7 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   } : EOR;
   const displayLastLap = demoMode ? {"Kyle Larson":29.7,"William Byron":29.9,"Denny Hamlin":30.0,"Ryan Blaney":30.1,"Brad Keselowski":demoPace,"Chase Elliott":30.0} : LAST_LAP_TIME;
   const displaySession = demoMode ? {track_name:"Bristol Motor Speedway",session_type:"RACE",session_date:"SYNTHETIC DEMO",current_lap:500,laps_in_race:500,flag_state:1} : session;
-  const displayPrimary = demoMode ? "Brad Keselowski" : primary;
+  const displayPrimary = demoMode ? demoSelectedDriver : primary;
   const palette = {
     bg: dark ? "#080d17" : "#f3f6fb",
     panel: dark ? "#111b2b" : "#ffffff",
@@ -341,7 +342,7 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   const ahead = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) - 1);
   const behind = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) + 1);
   const gapTo = (name) => {
-    const result = compareOfficialTiming(selected, TIMING[name]);
+    const result = compareOfficialTiming(selected, displayTiming[name]);
     if (result?.gapSeconds != null) return { label: (result.gapSeconds > 0 ? "+" : "") + fmt(result.gapSeconds, 2) + "s", value: result.gapSeconds };
     if (result?.lapDelta != null && result.lapDelta !== 0) {
       const laps = Math.abs(result.lapDelta);
@@ -397,7 +398,7 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
         </div>
         {towerNames.map(name => {
           const p=displayTiming[name]||{}, active=name===displayPrimary;
-          return <button key={name} onClick={()=>onSelectDriver(name)} style={{display:"grid",width:"100%",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,alignItems:"center",padding:"10px",textAlign:"left",border:0,borderBottom:"1px solid "+palette.line,background:active?(dark?"#173452":"#e5f2ff"):"transparent",color:palette.text,cursor:"pointer"}}>
+          return <button key={name} onClick={()=>demoMode?setDemoSelectedDriver(name):onSelectDriver(name)} style={{display:"grid",width:"100%",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,alignItems:"center",padding:"10px",textAlign:"left",border:0,borderBottom:"1px solid "+palette.line,background:active?(dark?"#173452":"#e5f2ff"):"transparent",color:palette.text,cursor:"pointer"}}>
             <span style={{fontSize:13,fontWeight:900,color:active?palette.accent:palette.muted,...mono}}>{displayPos[name]||"—"}</span>
             <span style={{minWidth:0}}><span style={{display:"block",fontSize:11,fontWeight:850,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{displayNum[name]||"?"} {name}</span><span style={{display:"block",fontSize:8,color:palette.muted,marginTop:2}}>{p.laps_completed??"—"} LAPS</span></span>
             <span style={{textAlign:"right",fontSize:10,fontWeight:800,...mono}}>{formatOfficialLeaderGap(p,leaderTiming)?.label || "—"}</span>
