@@ -5,7 +5,7 @@ import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
-import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap } from "./engineeringMetrics";
+import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -284,7 +284,7 @@ function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggle
 
 
 /* ═══ RACE COMMAND COCKPIT ═══ */
-function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, STINT, primary, onSelectDriver, dark, status }) {
+function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, EOR, STINT, primary, onSelectDriver, dark, status }) {
   const palette = {
     bg: dark ? "#080d17" : "#f3f6fb",
     panel: dark ? "#111b2b" : "#ffffff",
@@ -300,13 +300,19 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   const mono = { fontFamily: "'SF Mono','Consolas',monospace", fontVariantNumeric: "tabular-nums" };
   const ordered = [...NAMES].sort((a,b) => (SIM_POS[a] || 99) - (SIM_POS[b] || 99));
   const selected = TIMING[primary] || {};
+  const leaderName = ordered.find(n => SIM_POS[n] === 1);
+  const leaderTiming = leaderName ? TIMING[leaderName] : null;
+  const timeToLeader = formatOfficialLeaderGap(selected, leaderTiming);
   const ahead = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) - 1);
   const behind = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) + 1);
   const gapTo = (name) => {
-    const other = TIMING[name] || {};
-    if (selected.laps_completed == null || other.laps_completed == null || selected.laps_completed !== other.laps_completed ||
-        selected.delta_leader == null || other.delta_leader == null) return null;
-    return Number(selected.delta_leader) - Number(other.delta_leader);
+    const result = compareOfficialTiming(selected, TIMING[name]);
+    if (result?.gapSeconds != null) return { label: (result.gapSeconds > 0 ? "+" : "") + fmt(result.gapSeconds, 2) + "s", value: result.gapSeconds };
+    if (result?.lapDelta != null && result.lapDelta !== 0) {
+      const laps = Math.abs(result.lapDelta);
+      return { label: laps + " lap" + (laps === 1 ? "" : "s") + (result.lapDelta < 0 ? " behind" : " ahead"), value: result.lapDelta };
+    }
+    return null;
   };
   const fmt = (v, digits=3) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(digits);
   const statusLabel = status === "live" ? "LIVE DATA" : status === "no_session" ? "REPLAY / STORED DATA" : String(status || "CONNECTING").toUpperCase();
@@ -329,9 +335,9 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
         {metric("SELECTED DRIVER", "#"+(NUM[primary] || "?")+" · "+primary.split(" ").slice(-1)[0], "P"+(SIM_POS[primary] || "—")+" · "+(selected.laps_completed ?? "—")+" laps completed")}
-        {metric("OFFICIAL GAP TO LEADER", selected.delta_leader == null ? "—" : fmt(selected.delta_leader,2)+"s", "NASCAR timing feed · not reconstructed")}
+        {metric("TIME TO LEADER", timeToLeader?.label || "—", "Official NASCAR timing · lapped cars shown as laps down")}
         {metric("LAST CLEAN LAP", fmt(LAST_LAP_TIME[primary]), "Lap-time history filter excludes detected cautions / pit laps")}
-        {metric("RECENT PACE · 5 LAPS", fmt(BEST[primary]?.t5), "Rolling best available 5-lap window")}
+        {metric("LAST 5 LAP AVG", fmt(EOR[primary]?.t5), "Current stint · latest five clean laps available")}
       </div>
       <div style={{...card,padding:12,marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official relative delta only on same lap</div></div>
@@ -340,26 +346,26 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
           return <div key={label} style={{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:8,alignItems:"center",padding:"9px 0",borderTop:"1px solid "+palette.line}}>
             <div style={{fontSize:9,fontWeight:900,color:palette.muted,letterSpacing:1}}>{label}</div>
             <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:800,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name ? "#"+(NUM[name]||"?")+" "+name : "No car "+label.toLowerCase()}</div><div style={{fontSize:9,color:palette.muted,marginTop:2}}>P{ name ? SIM_POS[name] : "—"} · {name ? (TIMING[name]?.laps_completed ?? "—")+" laps" : "—"}</div></div>
-            <div style={{fontSize:13,fontWeight:900,color:d==null?palette.muted:d>0?palette.red:palette.green,...mono}}>{d==null?"—":(d>0?"+":"")+fmt(d,2)+"s"}</div>
+            <div style={{fontSize:13,fontWeight:900,color:d==null?palette.muted:(typeof d.value==="number" && d.value>0)?palette.red:palette.green,...mono}}>{d?.label || "—"}</div>
           </div>;
         })}
       </div>
       <div style={{...card,overflow:"hidden"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px 10px"}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>LIVE TIMING TOWER</div><div style={{fontSize:9,color:palette.muted}}>TOP 12 · SORTED BY RUNNING POSITION</div></div>
         <div style={{display:"grid",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,padding:"7px 10px",background:palette.panel2,borderTop:"1px solid "+palette.line,borderBottom:"1px solid "+palette.line,fontSize:8,fontWeight:900,letterSpacing:.7,color:palette.muted}}>
-          <span>POS</span><span>DRIVER</span><span style={{textAlign:"right"}}>GAP*</span><span style={{textAlign:"right"}}>LAST</span><span style={{textAlign:"right"}}>5-LAP</span>
+          <span>POS</span><span>DRIVER</span><span style={{textAlign:"right"}}>TO LEADER</span><span style={{textAlign:"right"}}>LAST</span><span style={{textAlign:"right"}}>5-LAP</span>
         </div>
         {ordered.slice(0,12).map(name => {
           const p=TIMING[name]||{}, active=name===primary;
           return <button key={name} onClick={()=>onSelectDriver(name)} style={{display:"grid",width:"100%",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,alignItems:"center",padding:"10px",textAlign:"left",border:0,borderBottom:"1px solid "+palette.line,background:active?(dark?"#173452":"#e5f2ff"):"transparent",color:palette.text,cursor:"pointer"}}>
             <span style={{fontSize:13,fontWeight:900,color:active?palette.accent:palette.muted,...mono}}>{SIM_POS[name]||"—"}</span>
             <span style={{minWidth:0}}><span style={{display:"block",fontSize:11,fontWeight:850,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{NUM[name]||"?"} {name}</span><span style={{display:"block",fontSize:8,color:palette.muted,marginTop:2}}>{p.laps_completed??"—"} LAPS</span></span>
-            <span style={{textAlign:"right",fontSize:10,fontWeight:800,...mono}}>{p.delta_leader==null?"—":fmt(p.delta_leader,1)}</span>
+            <span style={{textAlign:"right",fontSize:10,fontWeight:800,...mono}}>{formatOfficialLeaderGap(p,leaderTiming)?.label || "—"}</span>
             <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(LAST_LAP_TIME[name])}</span>
-            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(BEST[name]?.t5)}</span>
+            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(EOR[name]?.t5)}</span>
           </button>;
         })}
-        <div style={{padding:"9px 11px",fontSize:9,lineHeight:1.5,color:palette.muted,borderTop:"1px solid "+palette.line}}>* GAP is NASCAR feed delta to leader, where supplied. Relative gap to selected driver is calculated only when both cars have the same completed-lap count. Last and 5-lap pace are calculated from public lap history, not official live timing.</div>
+        <div style={{padding:"9px 11px",fontSize:9,lineHeight:1.5,color:palette.muted,borderTop:"1px solid "+palette.line}}>* Time to leader uses official NASCAR delta on the same lap and shows lap count when a car is lapped. Last lap and current-stint 5-lap average are calculated from public lap history.</div>
       </div>
     </section>
   );
@@ -814,7 +820,7 @@ export default function App() {
             ))}
           </div>
 
-          {tab === 0 && <RaceCommandCockpit session={session} NAMES={NAMES} NUM={NUM} SIM_POS={SIM_POS} TIMING={TIMING} LAST_LAP_TIME={LAST_LAP_TIME} BEST={BEST} STINT={STINT} primary={primaryResolved} onSelectDriver={setPrimary} dark={dark} status={status} />}
+          {tab === 0 && <RaceCommandCockpit session={session} NAMES={NAMES} NUM={NUM} SIM_POS={SIM_POS} TIMING={TIMING} LAST_LAP_TIME={LAST_LAP_TIME} BEST={BEST} EOR={EOR} STINT={STINT} primary={primaryResolved} onSelectDriver={setPrimary} dark={dark} status={status} />}
           {tab === 0 && false && (
             <div style={{ padding: "0 10px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", marginBottom: 6 }}>
@@ -1108,7 +1114,7 @@ export default function App() {
             const selectedTiming = TIMING[primaryResolved] || {};
             const selectedPitStops = PIT_STOPS[primaryResolved] || [];
             const latestPit = selectedPitStops[selectedPitStops.length - 1] || null;
-            const officialLeaderGap = selectedTiming.delta_leader != null ? Number(selectedTiming.delta_leader) : null;
+            const leaderTiming = TIMING[NAMES.find((n) => SIM_POS[n] === 1)] || null;\n            const officialLeaderGap = formatOfficialLeaderGap(selectedTiming, leaderTiming)?.label || null;
             const battleDriver = compDrivers.find((name) => name !== primaryResolved) || "";
             const lapBattle = battleDriver ? compareLapByLap(LAPS[primaryResolved] || [], LAPS[battleDriver] || []) : null;
             const metricCard = (label, value, detail) => (
@@ -1136,7 +1142,7 @@ export default function App() {
                   {metricCard("10-LAP PACE RANK", paceRank ? "#" + paceRank + " / " + ranked.length : "—", "Among drivers with a valid 10-lap run")}
                   {metricCard("10-LAP VS FIELD MEDIAN", deltaText(medianDelta), "Negative = faster than field median")}
                   {metricCard("LAST 5 VS PRIOR 5", deltaText(trend), trend == null ? "Requires 10 consecutive clean laps" : trend < 0 ? "Pace improving" : trend > 0 ? "Pace slowing" : "No change")}
-                  {metricCard("GAP TO LEADER", officialLeaderGap == null ? "—" : officialLeaderGap.toFixed(2) + "s", "NASCAR live-feed delta")}
+                  {metricCard("TIME TO LEADER", officialLeaderGap || "—", "Official timing · lapped cars shown as laps down")}
                   {metricCard("LAST PIT STOP", latestPit ? "Lap " + latestPit.lap_number : "—", latestPit?.details?.total_duration != null ? Number(latestPit.details.total_duration).toFixed(1) + "s pit road" : "Pit event not supplied")}
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
