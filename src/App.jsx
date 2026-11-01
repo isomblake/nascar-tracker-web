@@ -446,8 +446,6 @@ export default function App() {
     const lapCount = extraWindow === "all" ? 9999 : (extraWindow || 30);
 
     const theirThr = thrFor(BEST, name);
-    const theirCl = (LAPS[name] || []).filter(([n, t]) => t > 0 && t <= theirThr && !isCaution(n));
-    const myClLaps = myCl;
     const raceTiming = compareRaceLaps(LAPS[primaryResolved] || [], LAPS[name] || []);
     const d = raceTiming.lastLapDelta;
     const dc = d == null ? sub : d > 0 ? "#ef4444" : "#22c55e";
@@ -527,7 +525,7 @@ export default function App() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 9, color: sub }}>P{SIM_POS[name] || "?"}</div>
-            {raceTiming.lapDelta !== 0 ? (
+            {raceTiming.lapDelta != null && raceTiming.lapDelta !== 0 ? (
               <>
                 <div style={{ fontSize: 9, color: sub }}>LAP STATUS</div>
                 <div style={{ fontSize: 19, fontWeight: 800, color: raceTiming.lapDelta > 0 ? "#22c55e" : "#ef4444", ...MF }}>
@@ -994,6 +992,11 @@ export default function App() {
                   <option value="">30L</option><option value="35">35L</option><option value="40">40L</option><option value="50">50L</option><option value="75">75L</option><option value="100">100L</option>
                 </select>
               </div>
+              {!pNA.some((n) => pG[n] != null) && (
+                <div style={{ fontSize: 10, color: sub, margin: "-4px 0 10px", textAlign: "center" }}>
+                  No practice group assignments were supplied for this session. Showing the full field.
+                </div>
+              )}
 
               <div style={{ background: dark ? acc + "10" : acc + "08", border: `1px solid ${acc}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
