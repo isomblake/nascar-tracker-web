@@ -217,7 +217,7 @@ export function useLiveSession() {
       // 4. Load positions
       const { data: pos } = await supabase
         .from('positions')
-        .select('driver_key, position')
+        .select('*')
         .eq('session_id', activeId);
       setRawPositions(pos || []);
 
@@ -288,7 +288,7 @@ export function useLiveSession() {
         // Positions: small table (one row per driver), just refetch it all
         const { data: pos } = await supabase
           .from('positions')
-          .select('driver_key, position')
+          .select('*')
           .eq('session_id', sessId);
         if (!cancelled && pos) setRawPositions(pos);
 
