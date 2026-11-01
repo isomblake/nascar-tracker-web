@@ -18,7 +18,7 @@ export function compareRaceLaps(primaryLaps, competitorLaps) {
   const competitor = toLapMap(competitorLaps);
   const primaryLap = primary.size ? Math.max(...primary.keys()) : 0;
   const competitorLap = competitor.size ? Math.max(...competitor.keys()) : 0;
-  const lapDelta = primaryLap - competitorLap;
+  const lapDelta = primaryLap > 0 && competitorLap > 0 ? primaryLap - competitorLap : null;
   const commonLaps = [...primary.keys()]
     .filter((lap) => competitor.has(lap))
     .sort((a, b) => a - b);
