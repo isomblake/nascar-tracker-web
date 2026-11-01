@@ -302,7 +302,7 @@ serve(async (req) => {
       // Practice: extract from vehicles array
       const vehicles: any[] = lapData.vehicles ?? lapData.Vehicles ?? [];
       for (const v of vehicles) {
-        const driverKey = String(v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.vehicle_number ?? "");
+        const driverKey = String(v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.driver?.driver_id ?? v.driver?.id ?? v.vehicle_number ?? "");
         if (!driverKey) continue;
         const carNumber = String(v.vehicle_number ?? v.Number ?? "");
         const fullName = String(v.driver?.FullName ?? v.FullName ?? v.driver?.full_name ?? "");
@@ -356,7 +356,7 @@ serve(async (req) => {
 
     const pitVehicles: any[] = liveDataForEvents?.vehicles ?? liveDataForEvents?.Vehicles ?? [];
     for (const vehicle of pitVehicles) {
-      const driverKey = String(vehicle.NASCARDriverID ?? vehicle.driver?.NASCARDriverID ?? vehicle.vehicle_number ?? "");
+      const driverKey = String(vehicle.NASCARDriverID ?? vehicle.driver?.NASCARDriverID ?? vehicle.driver?.driver_id ?? vehicle.driver?.id ?? vehicle.vehicle_number ?? "");
       const stops: any[] = vehicle.pit_stops ?? vehicle.PitStops ?? [];
       for (const stop of stops) {
         const pitLap = Number(stop.pit_in_lap_count ?? stop.pit_in_leader_lap ?? 0);
