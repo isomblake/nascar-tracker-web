@@ -89,7 +89,8 @@ export function compareRunsByTireAge(primaryRun, competitorRun, windows = [[1, 5
     for (let age = startAge; age <= endAge; age++) {
       if (primary.has(age) && competitor.has(age)) ages.push(age);
     }
-    const delta = ages.length
+    const requiredMatches = Math.ceil((endAge - startAge + 1) * 0.8);
+    const delta = ages.length >= requiredMatches
       ? ages.reduce((sum, age) => sum + primary.get(age) - competitor.get(age), 0) / ages.length
       : null;
     return { startAge, endAge, matchedLaps: ages.length, deltaSecondsPerLap: delta };
