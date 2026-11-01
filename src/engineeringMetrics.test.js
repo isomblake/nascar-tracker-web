@@ -62,13 +62,13 @@ describe("engineeringMetrics", () => {
       { laps_completed: 443, delta_leader: 0 }
     )).toEqual({ label: "1.35s", type: "seconds", value: 1.346 });
     expect(formatOfficialLeaderGap(
-      { laps_completed: 440, delta_leader: -3 },
-      { laps_completed: 443, delta_leader: 0 }
-    )).toEqual({ label: "3 laps down", type: "laps", value: 3 });
+      { laps_completed: 440, delta_leader: -3, vehicle_elapsed_time: 10238.595 },
+      { laps_completed: 443, delta_leader: 0, vehicle_elapsed_time: 10173.195 }
+    )).toEqual({ label: "3 laps down · 65.4s", type: "laps", value: 3, timeGapSeconds: 65.4 });
     expect(formatOfficialLeaderGap(
       { laps_completed: 443, delta_leader: 0 },
       { laps_completed: 443, delta_leader: 0 }
-    )).toEqual({ label: "LEADER", type: "leader", value: 0 });
+    )).toEqual({ label: "LEADER", type: "leader", value: 0, timeGapSeconds: 0 });
   });
 
   test("does not interpret negative NASCAR lap-down sentinel values as seconds", () => {
