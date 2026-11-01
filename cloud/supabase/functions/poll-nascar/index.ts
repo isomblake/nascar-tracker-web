@@ -64,7 +64,7 @@ function getDrivers(lapData: any, liveData: any): any[] {
             ? [{ Lap: v.laps_completed, LapTime: v.last_lap_time }]
             : existingLaps;
         return {
-          NASCARDriverID: v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.vehicle_number,
+          NASCARDriverID: v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.driver?.driver_id ?? v.driver?.id ?? v.vehicle_number,
           Number: v.vehicle_number ?? v.Number,
           FullName: v.driver?.FullName ?? v.FullName ?? v.driver?.full_name ?? "",
           Laps: synthLaps,
@@ -90,7 +90,7 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
   const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
   const vehicleByDriver = new Map<string, any>();
   for (const vehicle of vehicles) {
-    const key = String(vehicle.NASCARDriverID ?? vehicle.driver?.NASCARDriverID ?? vehicle.vehicle_number ?? "");
+    const key = String(vehicle.NASCARDriverID ?? vehicle.driver?.NASCARDriverID ?? vehicle.driver?.driver_id ?? vehicle.driver?.id ?? vehicle.vehicle_number ?? "");
     if (key) vehicleByDriver.set(key, vehicle);
   }
   const driverRows: any[] = [];
