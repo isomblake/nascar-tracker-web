@@ -189,6 +189,7 @@ export function useHistorySession(sessionId) {
     }
 
     const BEST = {}, EOR = {}, LAPS = {}, NUM = {}, CLR = {}, GROUPS = {};
+    const RUN_ANALYSIS = {}, PIT_STOPS = {};
 
     for (const d of drivers) {
       const dkey = d.driver_key;
