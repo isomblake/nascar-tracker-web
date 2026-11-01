@@ -130,12 +130,22 @@ export function compareLapByLap(primaryLaps, competitorLaps) {
   };
 }
 
+export function isTireChangePitStop(stop) {
+  const details = stop?.details || stop || {};
+  const keys = ["left_front_tire_changed", "left_rear_tire_changed", "right_front_tire_changed", "right_rear_tire_changed"];
+  const flags = keys.map((key) => details[key]).filter((value) => typeof value === "boolean");
+  if (flags.some(Boolean)) return true;
+  if (flags.length === keys.length) return false;
+  const type = String(details.pit_stop_type ?? details.stop_type ?? "").toUpperCase();
+  return type.includes("TIRE_CHANGE");
+}
+
 export function buildDriverRunAnalysis(laps, options = {}) {
   const cautionLaps = toSet(options.cautionLaps);
   const explicitPitLaps = toSet(options.pitLaps);
   const validTimes = (laps || []).map((row) => Number(row?.[1])).filter((time) => Number.isFinite(time) && time > 0 && time < 300);
   const best = validTimes.length ? Math.min(...validTimes) : null;
-  const hasOfficialPitEvents = explicitPitLaps.size > 0;
+  const hasVerifiedTireChanges = explicitPitLaps.size > 0;
   const inferredPitLaps = new Set();
   if (best != null) {
     for (const row of laps || []) {
@@ -150,12 +160,12 @@ export function buildDriverRunAnalysis(laps, options = {}) {
     runs: runs.map((run) => ({
       ...run,
       summary: summarizeRun(run),
-      tireAgeBasis: hasOfficialPitEvents && inferredPitLaps.size ? "mixed-pit-events-and-inference" : hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
-      tireAgeConfidence: hasOfficialPitEvents && inferredPitLaps.size === 0 ? "higher" : "estimated",
+      tireAgeBasis: hasVerifiedTireChanges && inferredPitLaps.size ? "mixed-pit-events-and-inference" : hasVerifiedTireChanges ? "official-pit-event" : "inferred-run-boundary",
+      tireAgeConfidence: hasVerifiedTireChanges && inferredPitLaps.size === 0 ? "higher" : "estimated",
     })),
     pitLaps: [...pitLaps].sort((a, b) => a - b),
-    hasOfficialPitEvents,
-    tireAgeBasis: hasOfficialPitEvents && inferredPitLaps.size ? "mixed-pit-events-and-inference" : hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
+    hasVerifiedTireChanges,
+    tireAgeBasis: hasVerifiedTireChanges && inferredPitLaps.size ? "mixed-pit-events-and-inference" : hasVerifiedTireChanges ? "official-pit-event" : "inferred-run-boundary",
   };
 }
 
