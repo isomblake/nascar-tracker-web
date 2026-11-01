@@ -635,7 +635,7 @@ export default function App() {
       {/* HEADER — title row only; no mode buttons to prevent horizontal overflow */}
       <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", background: bg, position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>RACE ANALYTICS</div>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>DRIVER COCKPIT</div>
           <div style={{ fontSize: 10, color: sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {session?.track_name?.toUpperCase() || "—"}
             {session?.current_lap != null && session?.laps_in_race != null && session.laps_in_race > 0 && (
@@ -814,6 +814,7 @@ export default function App() {
               </div>
 
               <div style={{ fontSize: 9, color: sub, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>POSITION BATTLE</div>
+              <div style={{ fontSize: 8, color: sub, marginBottom: 6 }}>Gap is calculated from matched lap times, not a direct NASCAR interval feed. It updates through the latest lap completed by both cars.</div>
               <RaceComp label="Car Ahead" emoji="▲" name={aheadName} borderColor="#22c55e" />
               <RaceComp label="Car Behind" emoji="▼" name={behindName} borderColor="#ef4444" isBehind />
 
