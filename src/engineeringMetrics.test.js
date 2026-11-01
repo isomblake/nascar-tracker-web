@@ -41,6 +41,7 @@ describe("engineeringMetrics", () => {
     expect(isTireChangePitStop({ details: { pit_stop_type: "FOUR_WHEEL_CHANGE" } })).toBe(true);
     expect(isTireChangePitStop({ details: { pit_stop_type: "TWO_WHEEL_CHANGE_LEFT" } })).toBe(true);
     expect(getPitStopTireCount({ details: { pit_stop_type: "FOUR_WHEEL_CHANGE" } })).toBe(4);
+    expect(getPitStopTireCount({ details: { pit_stop_type: "FOUR_TIRE_CHANGE" } })).toBe(4);
     expect(getPitStopTireCount({ details: { pit_stop_type: "TWO_WHEEL_CHANGE_LEFT" } })).toBe(2);
     expect(getPitStopTireCount({ details: { pit_stop_type: "OTHER" } })).toBeNull();
     expect(isTireChangePitStop({ details: { total_duration: 13.2 } })).toBe(false);
