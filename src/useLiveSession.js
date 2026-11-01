@@ -9,6 +9,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
+import { buildDriverRunAnalysis } from './engineeringMetrics';
 
 // Track-independent lap classification:
 // - A "pit/outlier lap" is anything significantly slower than the driver's best.
@@ -116,7 +117,8 @@ export function useLiveSession() {
   const [session, setSession] = useState(null);
   const [drivers, setDrivers] = useState([]);         // [{driver_key, car_number, full_name, last_name, practice_group}]
   const [rawLaps, setRawLaps] = useState([]);         // [{driver_key, lap_number, lap_time}]
-  const [rawPositions, setRawPositions] = useState([]); // [{driver_key, position}]
+  const [rawPositions, setRawPositions] = useState([]); // current official vehicle timing snapshot
+  const [rawPitStops, setRawPitStops] = useState([]); // append-only pit stop events from NASCAR feed
   const [status, setStatus] = useState('connecting');
   const [error, setError] = useState(null);
 
@@ -160,7 +162,7 @@ export function useLiveSession() {
         let lFrom = 0;
         while (true) {
           const { data: chunk } = await supabase
-            .from('laps').select('driver_key, lap_number, lap_time')
+            .from('laps').select('driver_key, lap_number, lap_time, is_caution, is_pit')
             .eq('session_id', recentId)
             .order('lap_number', { ascending: true })
             .range(lFrom, lFrom + 999);
@@ -172,8 +174,12 @@ export function useLiveSession() {
         setRawLaps(lapsAll);
 
         const { data: pos } = await supabase
-          .from('positions').select('driver_key, position').eq('session_id', recentId);
+          .from('positions').select('*').eq('session_id', recentId);
         setRawPositions(pos || []);
+        const { data: recentPitStops } = await supabase
+          .from('race_events').select('driver_key, lap_number, details, recorded_at')
+          .eq('session_id', recentId).eq('event_type', 'pit_stop').order('lap_number', { ascending: true });
+        setRawPitStops(recentPitStops || []);
         setStatus('no_session');
         setError(null);
         return;
@@ -389,6 +395,7 @@ function detectCautionLaps(rawLaps) {
   const derived = useMemo(() => {
     // FIRST: detect field-wide caution laps (done once for whole field)
     const cautionSet = detectCautionLaps(rawLaps);
+    rawLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
 
     // Group laps by driver_key
     const byDriver = {};
@@ -407,6 +414,9 @@ function detectCautionLaps(rawLaps) {
     const STINT = {};           // per-driver: current stint laps array
     const LAST_PIT = {};        // per-driver: lap number of last pit stop (or null)
     const LAST_LAP_TIME = {};   // per-driver: most recent clean lap time (for full-field "Last" column)
+    const RUN_ANALYSIS = {};    // per-driver: separated runs with tire-age confidence
+    const TIMING = {};          // official NASCAR vehicle timing snapshot
+    const PIT_STOPS = {};       // per-driver append-only pit stop history
 
     // Stable color palette for drivers (cycled by car-number hash)
     const PALETTE = [
@@ -423,6 +433,12 @@ function detectCautionLaps(rawLaps) {
 
       const rawDrv = byDriver[dkey] || [];
       const stats = computeDriverStats(rawDrv, cautionSet);
+      const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
+      RUN_ANALYSIS[dispName] = buildDriverRunAnalysis(
+        stats.laps,
+        { cautionLaps: [...cautionSet], pitLaps: driverPitStops.map((stop) => stop.lap_number) }
+      );
+      PIT_STOPS[dispName] = driverPitStops;
       BEST[dispName] = stats.best;
       EOR[dispName] = stats.eor;
       LAPS[dispName] = stats.laps;
@@ -454,9 +470,12 @@ function detectCautionLaps(rawLaps) {
     }
 
     for (const p of rawPositions) {
-      // Map driver_key -> full_name for SIM_POS
+      // Map driver_key -> full_name for position and official timing snapshots.
       const drv = drivers.find((x) => x.driver_key === p.driver_key);
-      if (drv) SIM_POS[drv.full_name] = p.position;
+      if (drv) {
+        SIM_POS[drv.full_name] = p.position;
+        TIMING[drv.full_name] = p;
+      }
     }
 
     const NAMES = drivers
@@ -472,8 +491,8 @@ function detectCautionLaps(rawLaps) {
       else cautionRanges.push({ start: lap, end: lap });
     }
 
-    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, NAMES, cautionSet, cautionRanges };
-  }, [drivers, rawLaps, rawPositions]);
+    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, RUN_ANALYSIS, TIMING, PIT_STOPS, NAMES, cautionSet, cautionRanges };
+  }, [drivers, rawLaps, rawPositions, rawPitStops]);
 
   return {
     session,
@@ -482,6 +501,7 @@ function detectCautionLaps(rawLaps) {
     drivers,
     rawLaps,
     rawPositions,
+    rawPitStops,
     ...derived,
     reload: loadAll,
   };
