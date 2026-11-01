@@ -306,6 +306,8 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   };
   const mono = { fontFamily: "'SF Mono','Consolas',monospace", fontVariantNumeric: "tabular-nums" };
   const ordered = [...NAMES].sort((a,b) => (SIM_POS[a] || 99) - (SIM_POS[b] || 99));
+  const towerNames = ordered.slice(0, 12);
+  if (primary && !towerNames.includes(primary)) towerNames.push(primary);
   const selected = TIMING[primary] || {};
   const leaderName = ordered.find(n => SIM_POS[n] === 1);
   const leaderTiming = leaderName ? TIMING[leaderName] : null;
@@ -358,11 +360,11 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
         })}
       </div>
       <div style={{...card,overflow:"hidden"}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px 10px"}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>LIVE TIMING TOWER</div><div style={{fontSize:9,color:palette.muted}}>TOP 12 · SORTED BY RUNNING POSITION</div></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px 10px"}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>LIVE TIMING TOWER</div><div style={{fontSize:9,color:palette.muted}}>TOP 12 + SELECTED DRIVER</div></div>
         <div style={{display:"grid",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,padding:"7px 10px",background:palette.panel2,borderTop:"1px solid "+palette.line,borderBottom:"1px solid "+palette.line,fontSize:8,fontWeight:900,letterSpacing:.7,color:palette.muted}}>
           <span>POS</span><span>DRIVER</span><span style={{textAlign:"right"}}>TO LEADER</span><span style={{textAlign:"right"}}>LAST</span><span style={{textAlign:"right"}}>5-LAP</span>
         </div>
-        {ordered.slice(0,12).map(name => {
+        {towerNames.map(name => {
           const p=TIMING[name]||{}, active=name===primary;
           return <button key={name} onClick={()=>onSelectDriver(name)} style={{display:"grid",width:"100%",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,alignItems:"center",padding:"10px",textAlign:"left",border:0,borderBottom:"1px solid "+palette.line,background:active?(dark?"#173452":"#e5f2ff"):"transparent",color:palette.text,cursor:"pointer"}}>
             <span style={{fontSize:13,fontWeight:900,color:active?palette.accent:palette.muted,...mono}}>{SIM_POS[name]||"—"}</span>
