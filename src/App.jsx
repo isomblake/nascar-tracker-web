@@ -894,7 +894,7 @@ export default function App() {
         </>
       )}
 
-          {tab === 3 && (() => {
+          {mode === "race" && tab === 3 && (() => {
             const validDrivers = NAMES.filter((n) => EOR[n]?.t10 != null);
             const ranked = [...validDrivers].sort((a, b) => EOR[a].t10 - EOR[b].t10);
             const paceRank = ranked.indexOf(primaryResolved) + 1;
