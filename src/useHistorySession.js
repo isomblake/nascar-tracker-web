@@ -9,7 +9,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
-import { buildDriverRunAnalysis } from './engineeringMetrics';
+import { buildDriverRunAnalysis, isTireChangePitStop } from './engineeringMetrics';
 
 const PIT_MARGIN_SECONDS = 5;
 const ABSOLUTE_MAX_LAP = 300;
@@ -201,10 +201,7 @@ export function useHistorySession(sessionId) {
       const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
       RUN_ANALYSIS[name] = buildDriverRunAnalysis(
         stats.laps,
-        { cautionLaps: [...cautionSet], pitLaps: [
-          ...driverPitStops.map((stop) => stop.lap_number),
-          ...rawLaps.filter((row) => row.driver_key === dkey && row.is_pit === true).map((row) => row.lap_number),
-        ] }
+        { cautionLaps: [...cautionSet], pitLaps: driverPitStops.filter(isTireChangePitStop).map((stop) => stop.lap_number) }
       );
       PIT_STOPS[name] = driverPitStops;
       BEST[name] = stats.best;
