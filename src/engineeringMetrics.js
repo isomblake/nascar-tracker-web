@@ -136,14 +136,17 @@ export function getPitStopTireCount(stop) {
   const flags = keys.map((key) => details[key]).filter((value) => typeof value === "boolean");
   if (flags.length) return flags.filter(Boolean).length;
   const type = String(details.pit_stop_type ?? details.stop_type ?? "").toUpperCase();
-  if (type.includes("FOUR_WHEEL_CHANGE")) return 4;
-  if (type.includes("TWO_WHEEL_CHANGE")) return 2;
+  if (type.includes("FOUR_WHEEL_CHANGE") || type.includes("FOUR_TIRE_CHANGE")) return 4;
+  if (type.includes("TWO_WHEEL_CHANGE") || type.includes("TWO_TIRE_CHANGE")) return 2;
   return null;
 }
 
 export function isTireChangePitStop(stop) {
   const count = getPitStopTireCount(stop);
-  return count != null && count > 0;
+  if (count != null) return count > 0;
+  const details = stop?.details || stop || {};
+  const type = String(details.pit_stop_type ?? details.stop_type ?? "").toUpperCase();
+  return type.includes("TIRE_CHANGE") || type.includes("WHEEL_CHANGE");
 }
 
 export function buildDriverRunAnalysis(laps, options = {}) {
