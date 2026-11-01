@@ -344,7 +344,7 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
         {metric("SELECTED DRIVER", "#"+(NUM[primary] || "?")+" · "+primary.split(" ").slice(-1)[0], "P"+(SIM_POS[primary] || "—")+" · "+(selected.laps_completed ?? "—")+" laps completed")}
-        {metric("TIME TO LEADER", timeToLeader?.label || "—", "Official NASCAR timing · lapped cars shown as laps down")}
+        {metric("TIME TO LEADER", timeToLeader?.label || "—", "Official elapsed-time gap plus lap deficit when lapped")}
         {metric("LAST CLEAN LAP", fmt(LAST_LAP_TIME[primary]), "Lap-time history filter excludes detected cautions / pit laps")}
         {metric("LAST 5 LAP AVG", fmt(EOR[primary]?.t5), "Current stint · latest five clean laps available")}
       </div>
@@ -1152,7 +1152,7 @@ export default function App() {
                   {metricCard("10-LAP PACE RANK", paceRank ? "#" + paceRank + " / " + ranked.length : "—", "Among drivers with a valid 10-lap run")}
                   {metricCard("10-LAP VS FIELD MEDIAN", deltaText(medianDelta), "Negative = faster than field median")}
                   {metricCard("LAST 5 VS PRIOR 5", deltaText(trend), trend == null ? "Requires 10 consecutive clean laps" : trend < 0 ? "Pace improving" : trend > 0 ? "Pace slowing" : "No change")}
-                  {metricCard("TIME TO LEADER", officialLeaderGap || "—", "Official timing · lapped cars shown as laps down")}
+                  {metricCard("TIME TO LEADER", officialLeaderGap || "—", "Elapsed-time gap plus lap deficit when lapped")}
                   {metricCard("LAST PIT STOP", latestPit ? "Lap " + latestPit.lap_number : "—", pitRoadDuration(latestPit?.details) != null ? pitRoadDuration(latestPit.details).toFixed(1) + "s pit road" : "Pit duration unavailable")}
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
