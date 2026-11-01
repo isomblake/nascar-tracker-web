@@ -4,6 +4,7 @@ import {
   compareRunsByTireAge,
   compareLapByLap,
   compareOfficialTiming,
+  isTireChangePitStop,
 } from "./engineeringMetrics";
 
 describe("engineeringMetrics", () => {
@@ -29,6 +30,13 @@ describe("engineeringMetrics", () => {
     const result = compareRunsByTireAge(a, b, [[1, 3]]);
     expect(result.comparisons[0].matchedLaps).toBe(3);
     expect(result.comparisons[0].deltaSecondsPerLap).toBeCloseTo(0.1, 5);
+  });
+
+  test("distinguishes tire-change stops from fuel-only or unknown stops", () => {
+    expect(isTireChangePitStop({ details: { left_front_tire_changed: true, right_front_tire_changed: false } })).toBe(true);
+    expect(isTireChangePitStop({ details: { left_front_tire_changed: false, left_rear_tire_changed: false, right_front_tire_changed: false, right_rear_tire_changed: false } })).toBe(false);
+    expect(isTireChangePitStop({ details: { pit_stop_type: "FOUR_TIRE_CHANGE" } })).toBe(true);
+    expect(isTireChangePitStop({ details: { total_duration: 13.2 } })).toBe(false);
   });
 
   test("uses official leader deltas for same-lap interval comparisons", () => {
