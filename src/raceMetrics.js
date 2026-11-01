@@ -26,13 +26,20 @@ export function compareRaceLaps(primaryLaps, competitorLaps) {
 
   const recent = commonLaps.slice(-10);
   const recentDeltas = recent.map((lap) => primary.get(lap) - competitor.get(lap));
-  const paceDelta5 = recentDeltas.length >= 5
-    ? recentDeltas.slice(-5).reduce((sum, value) => sum + value, 0) / 5
+  const isConsecutive = (laps) => laps.every((lap, index) => index === 0 || lap === laps[index - 1] + 1);
+  const lastFiveLaps = commonLaps.slice(-5);
+  const lastTenLaps = commonLaps.slice(-10);
+  const paceDelta5 = lastFiveLaps.length === 5 && isConsecutive(lastFiveLaps)
+    ? lastFiveLaps.reduce((sum, lap) => sum + primary.get(lap) - competitor.get(lap), 0) / 5
     : null;
-  const paceDelta10 = recentDeltas.length >= 10
-    ? recentDeltas.reduce((sum, value) => sum + value, 0) / 10
+  const paceDelta10 = lastTenLaps.length === 10 && isConsecutive(lastTenLaps)
+    ? lastTenLaps.reduce((sum, lap) => sum + primary.get(lap) - competitor.get(lap), 0) / 10
     : null;
-  const lastLapDelta = recentDeltas.length ? recentDeltas[recentDeltas.length - 1] : null;
+  const latestComparableIsCurrent = latestCommonLap != null &&
+    latestCommonLap >= Math.min(primaryLap, competitorLap) - 1;
+  const lastLapDelta = latestComparableIsCurrent && recentDeltas.length
+    ? recentDeltas[recentDeltas.length - 1]
+    : null;
 
   // A same-lap elapsed-time estimate is only displayed when both cars have
   // completed the same latest lap and the common lap history is substantially complete.
@@ -41,7 +48,8 @@ export function compareRaceLaps(primaryLaps, competitorLaps) {
     primaryLap > 0 &&
     primaryLap === competitorLap &&
     latestCommonLap === primaryLap &&
-    commonLaps.length >= Math.ceil(primaryLap * 0.9)
+    commonLaps[0] === 1 &&
+    commonLaps.length >= Math.ceil(primaryLap * 0.98)
   ) {
     gapSeconds = commonLaps.reduce(
       (sum, lap) => sum + primary.get(lap) - competitor.get(lap),
