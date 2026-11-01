@@ -1241,8 +1241,8 @@ export default function App() {
                     <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6 }}>RUN & TIRE-AGE ANALYSIS</div>
                     <div style={{ fontSize: 9, color: sub, marginTop: 2 }}>Compare pace at similar run ages, not just session-best laps</div>
                   </div>
-                  <span style={{ fontSize: 8, color: pRUN?.[pPri]?.hasOfficialPitEvents ? "#22c55e" : "#eab308", fontWeight: 700 }}>
-                    {pRUN?.[pPri]?.hasOfficialPitEvents ? "PIT DATA" : "RUN AGE EST."}
+                  <span style={{ fontSize: 8, color: pRUN?.[pPri]?.hasVerifiedTireChanges ? "#22c55e" : "#eab308", fontWeight: 700 }}>
+                    {pRUN?.[pPri]?.hasVerifiedTireChanges ? "PIT DATA" : "RUN AGE EST."}
                   </span>
                 </div>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
@@ -1278,7 +1278,7 @@ export default function App() {
                     </div>
                     <div style={{ fontSize: 9, color: sub, marginBottom: 6 }}>
                       {pPri} Run {primaryRun.runNumber}: {primaryRun.laps.length} clean laps · L{primaryRun.startLap}–{primaryRun.endLap} ·
-                      {" "}{primaryRun.tireAgeConfidence === "higher" ? "pit-stop recorded" : "run age inferred"}
+                      {" "}{primaryRun.tireAgeConfidence === "higher" ? "tire change recorded" : "run age inferred"}
                       {primaryRunSummary.firstToLastFiveDelta != null ? ` · first 5 to last 5: ${primaryRunSummary.firstToLastFiveDelta > 0 ? "+" : ""}${primaryRunSummary.firstToLastFiveDelta.toFixed(3)}s` : ""}
                     </div>
                     {runComparison && (
