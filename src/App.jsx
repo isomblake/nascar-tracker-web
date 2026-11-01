@@ -340,7 +340,7 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
         {metric("LAST 5 LAP AVG", fmt(EOR[primary]?.t5), "Current stint · latest five clean laps available")}
       </div>
       <div style={{...card,padding:12,marginBottom:10}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official relative delta only on same lap</div></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official interval or lap-count difference</div></div>
         {[["AHEAD",ahead],["BEHIND",behind]].map(([label,name]) => {
           const d= name ? gapTo(name) : null;
           return <div key={label} style={{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:8,alignItems:"center",padding:"9px 0",borderTop:"1px solid "+palette.line}}>
@@ -1114,7 +1114,8 @@ export default function App() {
             const selectedTiming = TIMING[primaryResolved] || {};
             const selectedPitStops = PIT_STOPS[primaryResolved] || [];
             const latestPit = selectedPitStops[selectedPitStops.length - 1] || null;
-            const leaderTiming = TIMING[NAMES.find((n) => SIM_POS[n] === 1)] || null;\n            const officialLeaderGap = formatOfficialLeaderGap(selectedTiming, leaderTiming)?.label || null;
+            const leaderTiming = TIMING[NAMES.find((n) => SIM_POS[n] === 1)] || null;
+            const officialLeaderGap = formatOfficialLeaderGap(selectedTiming, leaderTiming)?.label || null;
             const battleDriver = compDrivers.find((name) => name !== primaryResolved) || "";
             const lapBattle = battleDriver ? compareLapByLap(LAPS[primaryResolved] || [], LAPS[battleDriver] || []) : null;
             const metricCard = (label, value, detail) => (
