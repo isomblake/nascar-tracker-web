@@ -3,6 +3,7 @@ import {
   summarizeRun,
   compareRunsByTireAge,
   compareLapByLap,
+  compareOfficialTiming,
 } from "./engineeringMetrics";
 
 describe("engineeringMetrics", () => {
@@ -14,11 +15,11 @@ describe("engineeringMetrics", () => {
   });
 
   test("summarizes average, median, consistency and falloff", () => {
-    const run = { laps: [30, 30.1, 30.2, 30.3, 30.4, 30.5].map((time, i) => ({ lap: i + 1, time, tireAge: i + 1 })) };
+    const run = { laps: [30, 30.1, 30.2, 30.3, 30.4, 30.5, 30.6, 30.7, 30.8, 30.9].map((time, i) => ({ lap: i + 1, time, tireAge: i + 1 })) };
     const summary = summarizeRun(run);
     expect(summary.lapCount).toBe(6);
-    expect(summary.average).toBeCloseTo(30.25, 5);
-    expect(summary.firstToLastFiveDelta).toBeCloseTo(0.1, 5);
+    expect(summary.average).toBeCloseTo(30.45, 5);
+    expect(summary.firstToLastFiveDelta).toBeCloseTo(0.5, 5);
     expect(summary.trendSecondsPerLap).toBeCloseTo(0.1, 5);
   });
 
@@ -28,6 +29,15 @@ describe("engineeringMetrics", () => {
     const result = compareRunsByTireAge(a, b, [[1, 3]]);
     expect(result.comparisons[0].matchedLaps).toBe(3);
     expect(result.comparisons[0].deltaSecondsPerLap).toBeCloseTo(0.1, 5);
+  });
+
+  test("uses official leader deltas for same-lap interval comparisons", () => {
+    const result = compareOfficialTiming(
+      { laps_completed: 100, delta_leader: 12.4 },
+      { laps_completed: 100, delta_leader: 11.1 }
+    );
+    expect(result.gapSeconds).toBeCloseTo(1.3, 5);
+    expect(result.source).toBe("difference-of-official-leader-deltas");
   });
 
   test("returns lap-by-lap and cumulative time deltas", () => {
