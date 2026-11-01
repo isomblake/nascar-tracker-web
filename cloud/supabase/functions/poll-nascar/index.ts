@@ -1,10 +1,5 @@
-// supabase/functions/poll-nascar/index.ts
-//
-// Triggered every 60s by pg_cron. Runs a sub-loop polling NASCAR every 5s
-// for ~55s, then exits (cron fires again for the next minute).
-//
-// If is_active=false on the active session, exits immediately — that's how Stop works.
-// Self-healing: if one invocation crashes, the next cron tick recovers.
+// NASCAR polling worker: one bounded poll per invocation, protected by a DB lease.
+// pg_cron runs once per minute. The lease prevents cron/manual-start overlap.
 
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
 import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -12,14 +7,11 @@ import { createClient, SupabaseClient } from "https://esm.sh/@supabase/supabase-
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
-const POLL_INTERVAL_MS = 5000;
-const MAX_RUNTIME_MS = 55_000; // leave headroom before 60s cron tick
-
-// NASCAR flag states
-const FLAG_CHECKERED = 4; // race over
-const FLAG_COLD = 9;      // session not started / ended (practice, qualifying end)
+const FLAG_CHECKERED = 4;
+const FLAG_COLD = 9;
 
 interface Session {
   id: number;
@@ -29,59 +21,42 @@ interface Session {
   poll_url: string;
   is_active: boolean;
   total_laps_seen: number | null;
+  current_lap: number | null;
 }
 
 async function fetchJson(url: string): Promise<any | null> {
   try {
-    const r = await fetch(url, { signal: AbortSignal.timeout(4000) });
-    if (!r.ok) return null;
-    return await r.json();
+    const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
+    if (!response.ok) return null;
+    return await response.json();
   } catch {
     return null;
   }
 }
 
-// Parse NASCAR lap-times.json payload and upsert new laps/positions.
-// Returns number of new laps written.
-// Handles both PascalCase (Cup) and camelCase/snake_case (Truck/Xfinity) CDN variants.
-async function processLapTimes(
-  supabase: SupabaseClient,
-  session: Session,
-  lapData: any,
-  liveData: any
-): Promise<number> {
-  // 1. Try lap-times.json: walk all top-level keys to find the driver array.
-  //    Key varies: "laps" (Cup), "Laps" (Truck/Xfinity), or other.
-  let driversArr: any[] = lapData?.laps ?? lapData?.Laps ?? [];
-  if (driversArr.length === 0 && lapData && typeof lapData === "object") {
-    for (const key of Object.keys(lapData)) {
-      const val = lapData[key];
-      if (Array.isArray(val) && val.length > 0) {
-        const first = val[0];
-        if (first?.NASCARDriverID != null || first?.vehicle_number != null || first?.Number != null) {
-          driversArr = val;
-          break;
-        }
+function getDrivers(lapData: any, liveData: any): any[] {
+  let drivers: any[] = lapData?.laps ?? lapData?.Laps ?? [];
+  if (!drivers.length && lapData && typeof lapData === "object") {
+    for (const value of Object.values(lapData)) {
+      if (!Array.isArray(value) || !value.length) continue;
+      const first: any = value[0];
+      if (first?.NASCARDriverID != null || first?.vehicle_number != null || first?.Number != null) {
+        drivers = value;
+        break;
       }
     }
   }
 
-  // 2. Fallback: live-feed.json vehicles array (practice sessions often only populate here).
-  //    During practice the CDN may only serve live-feed.json with per-vehicle state
-  //    (laps_completed + last_lap_time) rather than a full lap-by-lap array.
-  //    We synthesise a single lap record per driver per poll using laps_completed as
-  //    the lap number — upsert deduplication means repeated polls for the same lap are
-  //    ignored and new laps accumulate naturally.
-  if (driversArr.length === 0) {
+  if (!drivers.length) {
     const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
-    driversArr = vehicles
-      .filter((v: any) => v.laps_completed != null || (v.laps ?? v.Laps)?.length > 0)
-      .map((v: any) => {
+    drivers = vehicles
+      .filter((v) => v.laps_completed != null || (v.laps ?? v.Laps)?.length)
+      .map((v) => {
         const existingLaps = v.laps ?? v.Laps ?? [];
-        // If no laps array, synthesise one entry from aggregate fields
-        const synthLaps = existingLaps.length === 0 && v.laps_completed != null && v.last_lap_time != null && v.last_lap_time > 0
-          ? [{ Lap: v.laps_completed, LapTime: v.last_lap_time }]
-          : existingLaps;
+        const synthLaps =
+          !existingLaps.length && v.laps_completed != null && v.last_lap_time > 0
+            ? [{ Lap: v.laps_completed, LapTime: v.last_lap_time }]
+            : existingLaps;
         return {
           NASCARDriverID: v.NASCARDriverID ?? v.driver?.NASCARDriverID ?? v.vehicle_number,
           Number: v.vehicle_number ?? v.Number,
@@ -92,218 +67,195 @@ async function processLapTimes(
         };
       });
   }
+  return drivers;
+}
 
-  let newLaps = 0;
+async function pollOnce(supabase: SupabaseClient, session: Session) {
+  if (!session.poll_url) throw new Error("Active session has no poll_url");
+  const liveUrl = session.poll_url.replace("lap-times", "live-feed");
+  const [lapData, liveData] = await Promise.all([
+    fetchJson(session.poll_url),
+    fetchJson(liveUrl),
+  ]);
 
-  if (Array.isArray(driversArr) && driversArr.length > 0) {
-    const driverRows: any[] = [];
-    const lapRows: any[] = [];
-    const positionMap = new Map<string, number>();
+  if (!lapData && !liveData) throw new Error("Both NASCAR live-feed and lap-times endpoints failed");
 
-    for (const d of driversArr) {
-      const driverKey = String(d.NASCARDriverID ?? d.Number ?? "");
-      if (!driverKey) continue;
-      const carNumber = String(d.Number ?? "");
-      const fullName = d.FullName ?? "";
-      const lastName = fullName.split(" ").slice(-1)[0] ?? "";
+  const drivers = getDrivers(lapData, liveData);
+  const driverRows: any[] = [];
+  const lapRows: any[] = [];
+  const positionRows = new Map<string, any>();
 
-      driverRows.push({
+  for (const driver of drivers) {
+    const driverKey = String(driver.NASCARDriverID ?? driver.Number ?? "");
+    if (!driverKey) continue;
+    const fullName = driver.FullName ?? "";
+    const laps = driver.Laps ?? driver.laps ?? [];
+
+    driverRows.push({
+      session_id: session.id,
+      driver_key: driverKey,
+      car_number: String(driver.Number ?? ""),
+      full_name: fullName,
+      last_name: fullName.split(" ").slice(-1)[0] ?? "",
+      practice_group: driver.practice_group ?? driver.PracticeGroup ?? null,
+    });
+
+    for (const lap of laps) {
+      const lapNumber = lap.Lap ?? lap.lap ?? lap.lap_number;
+      const lapTime = lap.LapTime ?? lap.lapTime ?? lap.lap_time;
+      if (lapNumber == null || lapTime == null || Number(lapTime) <= 0) continue;
+      lapRows.push({
         session_id: session.id,
         driver_key: driverKey,
-        car_number: carNumber,
-        full_name: fullName,
-        last_name: lastName,
-        practice_group: d.practice_group ?? d.PracticeGroup ?? null,
+        lap_number: Number(lapNumber),
+        lap_time: Number(lapTime),
       });
-
-      // Handle both "Laps" (PascalCase) and "laps" (camelCase)
-      const laps = d.Laps ?? d.laps ?? [];
-      for (const lap of laps) {
-        // Handle PascalCase (Lap/LapTime/RunningPos), camelCase (lap/lapTime/running_pos), snake_case (lap_number)
-        const lapNumber = lap.Lap ?? lap.lap ?? lap.lap_number;
-        const lapTime = lap.LapTime ?? lap.lapTime ?? lap.lap_time;
-        if (lapNumber == null || lapTime == null || lapTime <= 0) continue;
-        lapRows.push({
-          session_id: session.id,
-          driver_key: driverKey,
-          lap_number: lapNumber,
-          lap_time: lapTime,
-        });
-      }
-
-      // Running position: try per-lap field first, then top-level vehicle field (live-feed fallback)
-      const topLevelPos = d.running_position ?? d.RunningPos ?? d.running_pos;
-      if (topLevelPos != null) {
-        positionMap.set(driverKey, topLevelPos);
-      } else if (laps.length > 0) {
-        const lastLap = laps[laps.length - 1];
-        const pos = lastLap.RunningPos ?? lastLap.running_pos ?? lastLap.runningPos;
-        if (pos != null) positionMap.set(driverKey, pos);
-      }
     }
 
-    if (driverRows.length > 0) {
-      await supabase
-        .from("drivers")
-        .upsert(driverRows, { onConflict: "session_id,driver_key" });
-    }
-
-    if (lapRows.length > 0) {
-      const CHUNK = 500;
-      for (let i = 0; i < lapRows.length; i += CHUNK) {
-        const chunk = lapRows.slice(i, i + CHUNK);
-        const { error } = await supabase
-          .from("laps")
-          .upsert(chunk, { onConflict: "session_id,driver_key,lap_number" });
-        if (!error) newLaps += chunk.length;
-      }
-    }
-
-    if (positionMap.size > 0) {
-      const positionRows = Array.from(positionMap.entries()).map(([driver_key, position]) => ({
+    const topPosition = driver.running_position ?? driver.RunningPos ?? driver.running_pos;
+    const lastLap = laps[laps.length - 1];
+    const position = topPosition ?? lastLap?.RunningPos ?? lastLap?.running_pos ?? lastLap?.runningPos;
+    if (position != null) {
+      positionRows.set(driverKey, {
         session_id: session.id,
-        driver_key,
-        position,
-      }));
-      await supabase
-        .from("positions")
-        .upsert(positionRows, { onConflict: "session_id,driver_key" });
+        driver_key: driverKey,
+        position: Number(position),
+      });
     }
   }
 
-  // Always update session heartbeat — even when no lap data came back
-  const sessionUpdate: any = {
+  if (driverRows.length) {
+    const { error } = await supabase
+      .from("drivers")
+      .upsert(driverRows, { onConflict: "session_id,driver_key" });
+    if (error) throw new Error("Driver upsert failed: " + error.message);
+  }
+
+  for (let i = 0; i < lapRows.length; i += 400) {
+    const { error } = await supabase
+      .from("laps")
+      .upsert(lapRows.slice(i, i + 400), { onConflict: "session_id,driver_key,lap_number" });
+    if (error) throw new Error("Lap upsert failed: " + error.message);
+  }
+
+  if (positionRows.size) {
+    const { error } = await supabase
+      .from("positions")
+      .upsert([...positionRows.values()], { onConflict: "session_id,driver_key" });
+    if (error) throw new Error("Position upsert failed: " + error.message);
+  }
+
+  const { count, error: countError } = await supabase
+    .from("laps")
+    .select("lap_number", { count: "exact", head: true })
+    .eq("session_id", session.id);
+  if (countError) throw new Error("Lap count failed: " + countError.message);
+
+  const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
+  const vehicleMaxLap = vehicles.reduce(
+    (max, vehicle) => Math.max(max, Number(vehicle.laps_completed ?? 0)),
+    0,
+  );
+  const payloadMaxLap = lapRows.reduce((max, lap) => Math.max(max, lap.lap_number), 0);
+  const currentLap =
+    liveData?.lap_number ??
+    (vehicleMaxLap > 0 ? vehicleMaxLap : payloadMaxLap > 0 ? payloadMaxLap : session.current_lap);
+
+  const sessionUpdate: Record<string, any> = {
     last_poll_at: new Date().toISOString(),
-    total_laps_seen: (session.total_laps_seen ?? 0) + newLaps,
+    total_laps_seen: count ?? 0,
+    last_error: null,
   };
-  if (liveData) {
-    if (liveData.flag_state != null) sessionUpdate.flag_state = liveData.flag_state;
-    if (liveData.lap_number != null) {
-      sessionUpdate.current_lap = liveData.lap_number;
-    } else {
-      // Fallback: derive from max laps_completed across vehicles (handles inter-segment gaps
-      // in the All Star Race where lap_number goes null but vehicle data keeps updating).
-      const vehicles: any[] = liveData.vehicles ?? liveData.Vehicles ?? [];
-      const maxLap = vehicles.reduce((m: number, v: any) => Math.max(m, v.laps_completed ?? 0), 0);
-      if (maxLap > 0) sessionUpdate.current_lap = maxLap;
-    }
-    if (liveData.laps_in_race != null) sessionUpdate.laps_in_race = liveData.laps_in_race;
-    if (liveData.laps_to_go != null) sessionUpdate.laps_to_go = liveData.laps_to_go;
-    if (liveData.stage != null) sessionUpdate.stage = liveData.stage;
-  }
-  await supabase.from("sessions").update(sessionUpdate).eq("id", session.id);
+  if (liveData?.flag_state != null) sessionUpdate.flag_state = liveData.flag_state;
+  if (currentLap != null) sessionUpdate.current_lap = currentLap;
+  if (liveData?.laps_in_race != null) sessionUpdate.laps_in_race = liveData.laps_in_race;
+  if (liveData?.laps_to_go != null) sessionUpdate.laps_to_go = liveData.laps_to_go;
+  if (liveData?.stage != null) sessionUpdate.stage = liveData.stage;
 
-  return newLaps;
+  const shouldStop =
+    liveData?.flag_state === FLAG_CHECKERED ||
+    (session.session_type !== "race" && liveData?.flag_state === FLAG_COLD);
+
+  if (shouldStop) sessionUpdate.is_active = false;
+
+  const { error: updateError } = await supabase
+    .from("sessions")
+    .update(sessionUpdate)
+    .eq("id", session.id);
+  if (updateError) throw new Error("Session heartbeat update failed: " + updateError.message);
+
+  return {
+    drivers_seen: driverRows.length,
+    lap_rows: lapRows.length,
+    lap_rows_total: count ?? 0,
+    current_lap: currentLap ?? null,
+    flag_state: liveData?.flag_state ?? null,
+    stopped: shouldStop,
+  };
 }
 
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
-  const startedAt = Date.now();
   const supabase = createClient(
     Deno.env.get("SUPABASE_URL")!,
-    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
+    Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
   );
 
-  try {
-    // Load active session
-    const { data: sessions, error } = await supabase
-      .from("sessions")
-      .select("*")
-      .eq("is_active", true)
-      .limit(1);
-    if (error) throw error;
+  let lockToken: string | null = null;
+  let sessionId: number | null = null;
 
-    if (!sessions || sessions.length === 0) {
-      return new Response(JSON.stringify({ ok: true, status: "no_active_session" }), {
+  try {
+    const { data: token, error: lockError } = await supabase.rpc("claim_nascar_poll_lock");
+    if (lockError) throw new Error("Could not claim poll lease: " + lockError.message);
+    lockToken = token;
+    if (!lockToken) {
+      return new Response(JSON.stringify({ ok: true, status: "poll_already_running" }), {
         status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const session = sessions[0] as Session;
-    const pollUrl = session.poll_url;
-    const liveUrl = pollUrl.replace("lap-times", "live-feed");
+    const { data: session, error: sessionError } = await supabase
+      .from("sessions")
+      .select("*")
+      .eq("is_active", true)
+      .order("started_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (sessionError) throw sessionError;
 
-    let polls = 0;
-    let totalNewLaps = 0;
-    let checkeredSeen = false;
-
-    while (Date.now() - startedAt < MAX_RUNTIME_MS) {
-      // Re-read is_active each tick — Stop button flips it to false
-      const { data: check } = await supabase
-        .from("sessions")
-        .select("is_active")
-        .eq("id", session.id)
-        .single();
-      if (!check || check.is_active === false) {
-        return new Response(
-          JSON.stringify({ ok: true, status: "stopped_by_user", polls, newLaps: totalNewLaps }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-        );
-      }
-
-      const [lapData, liveData] = await Promise.all([fetchJson(pollUrl), fetchJson(liveUrl)]);
-
-      // Always call processLapTimes — it handles lapData=null by falling back to
-      // live-feed.json vehicles (practice sessions often serve no lap-times.json).
-      // Race path is unchanged: lapData is always present for races.
-      const newLaps = await processLapTimes(supabase, session, lapData, liveData);
-      totalNewLaps += newLaps;
-
-      polls++;
-
-      // Auto-stop on checkered flag
-      if (liveData?.flag_state === FLAG_CHECKERED) {
-        checkeredSeen = true;
-        await supabase
-          .from("sessions")
-          .update({ is_active: false, flag_state: FLAG_CHECKERED })
-          .eq("id", session.id);
-        break;
-      }
-
-      // Auto-stop when session goes cold (practice/qualifying ended, or stale session).
-      // Not applied to races — the All Star Race and others have inter-segment breaks
-      // where flag_state briefly hits 9 (cold). Races stop only on FLAG_CHECKERED.
-      // Two conditions cover practice/qualifying:
-      //   totalSeen > 0 — session ran normally and data stopped coming in
-      //   polls >= 2    — stale/empty session that was never live (no-data guard)
-      const totalSeen = (session.total_laps_seen ?? 0) + totalNewLaps;
-      if (session.session_type !== 'race' && liveData?.flag_state === FLAG_COLD && (totalSeen > 0 || polls >= 2)) {
-        await supabase
-          .from("sessions")
-          .update({ is_active: false, flag_state: FLAG_COLD })
-          .eq("id", session.id);
-        break;
-      }
-
-      // Gentle wait
-      await new Promise((res) => setTimeout(res, POLL_INTERVAL_MS));
+    if (!session) {
+      return new Response(JSON.stringify({ ok: true, status: "no_active_session" }), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
+    sessionId = session.id;
 
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        status: checkeredSeen ? "checkered_auto_stop" : "cron_tick_complete",
-        session_id: session.id,
-        polls,
-        newLaps: totalNewLaps,
-        runtime_ms: Date.now() - startedAt,
-      }),
-      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-    );
-  } catch (err) {
-    // Log error on session row but don't crash the cron chain
-    try {
-      await supabase
+    const result = await pollOnce(supabase, session as Session);
+    return new Response(JSON.stringify({ ok: true, status: "poll_complete", session_id: sessionId, ...result }), {
+      status: 200,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (error) {
+    const message = String(error).slice(0, 500);
+    if (sessionId != null) {
+      const { error: recordError } = await supabase
         .from("sessions")
-        .update({ last_error: String(err).slice(0, 500) })
-        .eq("is_active", true);
-    } catch {}
-    return new Response(JSON.stringify({ ok: false, error: String(err) }), {
+        .update({ last_error: message })
+        .eq("id", sessionId);
+      if (recordError) console.error("Failed to record polling error:", recordError.message);
+    }
+    console.error("NASCAR poll failed:", message);
+    return new Response(JSON.stringify({ ok: false, error: message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+  } finally {
+    if (lockToken) {
+      const { error } = await supabase.rpc("release_nascar_poll_lock", { p_token: lockToken });
+      if (error) console.error("Failed to release poll lease:", error.message);
+    }
   }
 });
