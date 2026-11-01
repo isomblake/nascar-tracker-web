@@ -9,7 +9,7 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
-import { buildDriverRunAnalysis } from './engineeringMetrics';
+import { buildDriverRunAnalysis, isTireChangePitStop } from './engineeringMetrics';
 
 // Track-independent lap classification:
 // - A "pit/outlier lap" is anything significantly slower than the driver's best.
@@ -436,10 +436,7 @@ function detectCautionLaps(rawLaps) {
       const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
       RUN_ANALYSIS[dispName] = buildDriverRunAnalysis(
         stats.laps,
-        { cautionLaps: [...cautionSet], pitLaps: [
-          ...driverPitStops.map((stop) => stop.lap_number),
-          ...rawLaps.filter((row) => row.driver_key === dkey && row.is_pit === true).map((row) => row.lap_number),
-        ] }
+        { cautionLaps: [...cautionSet], pitLaps: driverPitStops.filter(isTireChangePitStop).map((stop) => stop.lap_number) }
       );
       PIT_STOPS[dispName] = driverPitStops;
       BEST[dispName] = stats.best;
