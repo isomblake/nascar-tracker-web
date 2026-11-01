@@ -548,7 +548,7 @@ export default function App() {
                 <div style={{ fontSize: 18, fontWeight: 800, color: sub, ...MF }}>—</div>
               </>
             )}
-            <div style={{ fontSize: 9, color: sub, marginTop: 4 }}>LAST LAP Δ</div>
+            <div style={{ fontSize: 9, color: sub, marginTop: 4 }}>LAST MATCHED LAP Δ · L{raceTiming.latestCommonLap ?? "—"}</div>
             <div style={{ fontSize: 13, fontWeight: 700, color: dc, ...MF }}>
               {d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}
             </div>
