@@ -5,7 +5,7 @@ import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
-import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap } from "./engineeringMetrics";
+import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap, getPitStopTireCount } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -1025,7 +1025,7 @@ export default function App() {
               };
             }).sort((a, b) => (b.lastPitLap ?? -1) - (a.lastPitLap ?? -1));
             const stopDetails = lastStop?.details || {};
-            const changedTires = ["left_front_tire_changed","left_rear_tire_changed","right_front_tire_changed","right_rear_tire_changed"].filter((key) => stopDetails[key] === true).length;
+            const changedTires = getPitStopTireCount(stopDetails);
             const panel = (title, body) => <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 10, padding: 12, marginBottom: 10 }}><div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.6, marginBottom: 8 }}>{title}</div>{body}</div>;
             return (
               <div style={{ padding: "12px 10px 24px", maxWidth: 900, margin: "0 auto" }}>
@@ -1050,7 +1050,7 @@ export default function App() {
                         ["LAST STOP", "Lap " + lastStop.lap_number],
                         ["PIT ROAD", pitRoadDuration(stopDetails) != null ? pitRoadDuration(stopDetails).toFixed(2) + "s" : "—"],
                         ["BOX TIME", stopDetails.pit_stop_duration != null ? Number(stopDetails.pit_stop_duration).toFixed(2) + "s" : "—"],
-                        ["TIRES", changedTires ? changedTires + " changed" : stopDetails.pit_stop_type || "Unknown"],
+                        ["TIRES", changedTires != null ? changedTires + " changed" : stopDetails.pit_stop_type || "Unknown"],
                         ["STINT AGE", lapsSinceStop == null ? "—" : lapsSinceStop + " laps"],
                         ["POSITION Δ", stopDetails.positions_gained ?? stopDetails.positions_gained_lossed ?? "—"],
                       ].map(([label,value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 8 }}>
