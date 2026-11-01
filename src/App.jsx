@@ -282,6 +282,89 @@ function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggle
   );
 }
 
+
+/* ═══ RACE COMMAND COCKPIT ═══ */
+function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, STINT, primary, onSelectDriver, dark, status }) {
+  const palette = {
+    bg: dark ? "#080d17" : "#f3f6fb",
+    panel: dark ? "#111b2b" : "#ffffff",
+    panel2: dark ? "#0c1421" : "#f7f9fc",
+    line: dark ? "#25344a" : "#dce4ef",
+    text: dark ? "#edf3fb" : "#142033",
+    muted: dark ? "#8292a8" : "#63738a",
+    accent: "#48a7ff",
+    green: "#39d98a",
+    yellow: "#f5bd4f",
+    red: "#ff647c"
+  };
+  const mono = { fontFamily: "'SF Mono','Consolas',monospace", fontVariantNumeric: "tabular-nums" };
+  const ordered = [...NAMES].sort((a,b) => (SIM_POS[a] || 99) - (SIM_POS[b] || 99));
+  const selected = TIMING[primary] || {};
+  const ahead = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) - 1);
+  const behind = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) + 1);
+  const gapTo = (name) => {
+    const other = TIMING[name] || {};
+    if (selected.laps_completed == null || other.laps_completed == null || selected.laps_completed !== other.laps_completed ||
+        selected.delta_leader == null || other.delta_leader == null) return null;
+    return Number(selected.delta_leader) - Number(other.delta_leader);
+  };
+  const fmt = (v, digits=3) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(digits);
+  const statusLabel = status === "live" ? "LIVE DATA" : status === "no_session" ? "REPLAY / STORED DATA" : String(status || "CONNECTING").toUpperCase();
+  const flag = session?.flag_state;
+  const flagLabel = ({1:"GREEN",2:"YELLOW",3:"RED",4:"CHECKERED",8:"WARMUP",9:"COLD"})[flag] || "FLAG N/A";
+  const flagColor = flag === 1 ? palette.green : flag === 2 ? palette.yellow : flag === 3 ? palette.red : palette.muted;
+  const card = { background: palette.panel, border: "1px solid " + palette.line, borderRadius: 12 };
+  const metric = (label,value,detail) => <div style={{background:palette.panel2,border:"1px solid "+palette.line,borderRadius:9,padding:"11px 12px",minWidth:0}}><div style={{fontSize:9,letterSpacing:1.1,fontWeight:800,color:palette.muted}}>{label}</div><div style={{fontSize:22,fontWeight:850,color:palette.text,marginTop:4,...mono}}>{value}</div>{detail && <div style={{fontSize:10,color:palette.muted,marginTop:3}}>{detail}</div>}</div>;
+  return (
+    <section style={{margin:"14px 12px 18px",color:palette.text}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+        <div><div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:palette.accent}}>RACE CONTROL / LIVE TIMING</div><div style={{fontSize:22,fontWeight:900,letterSpacing:-.6,marginTop:3}}>Race Command</div></div>
+        <div style={{textAlign:"right"}}><div style={{fontSize:9,fontWeight:900,letterSpacing:1.2,color:palette.muted}}>FEED STATUS</div><div style={{fontSize:11,fontWeight:900,color:status==="live"?palette.green:palette.yellow,marginTop:4}}>{statusLabel}</div></div>
+      </div>
+      <div style={{...card,padding:14,marginBottom:10,background:dark?"linear-gradient(120deg,#132b43,#101a2a 68%,#17243a)": "linear-gradient(120deg,#e5f2ff,#fff 70%,#eaf0fa)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+          <div style={{minWidth:0}}><div style={{fontSize:9,letterSpacing:1.4,fontWeight:900,color:palette.muted}}>TRACK / SESSION</div><div style={{fontSize:16,fontWeight:900,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{session?.track_name || "Session not identified"}</div><div style={{fontSize:10,color:palette.muted,marginTop:3}}>{String(session?.session_type || "NO SESSION").replaceAll("_"," ").toUpperCase()} · {session?.session_date || "—"}</div></div>
+          <div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:9,letterSpacing:1.2,fontWeight:900,color:palette.muted}}>RACE STATUS</div><div style={{fontSize:15,fontWeight:900,color:flagColor,marginTop:4}}>{flagLabel}</div><div style={{fontSize:11,color:palette.muted,...mono,marginTop:3}}>LAP {session?.current_lap ?? selected.laps_completed ?? "—"}{session?.laps_in_race ? " / "+session.laps_in_race : ""}</div></div>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
+        {metric("SELECTED DRIVER", "#"+(NUM[primary] || "?")+" · "+primary.split(" ").slice(-1)[0], "P"+(SIM_POS[primary] || "—")+" · "+(selected.laps_completed ?? "—")+" laps completed")}
+        {metric("OFFICIAL GAP TO LEADER", selected.delta_leader == null ? "—" : fmt(selected.delta_leader,2)+"s", "NASCAR timing feed · not reconstructed")}
+        {metric("LAST CLEAN LAP", fmt(LAST_LAP_TIME[primary]), "Lap-time history filter excludes detected cautions / pit laps")}
+        {metric("RECENT PACE · 5 LAPS", fmt(BEST[primary]?.t5), "Rolling best available 5-lap window")}
+      </div>
+      <div style={{...card,padding:12,marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official relative delta only on same lap</div></div>
+        {[["AHEAD",ahead],["BEHIND",behind]].map(([label,name]) => {
+          const d= name ? gapTo(name) : null;
+          return <div key={label} style={{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:8,alignItems:"center",padding:"9px 0",borderTop:"1px solid "+palette.line}}>
+            <div style={{fontSize:9,fontWeight:900,color:palette.muted,letterSpacing:1}}>{label}</div>
+            <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:800,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name ? "#"+(NUM[name]||"?")+" "+name : "No car "+label.toLowerCase()}</div><div style={{fontSize:9,color:palette.muted,marginTop:2}}>P{ name ? SIM_POS[name] : "—"} · {name ? (TIMING[name]?.laps_completed ?? "—")+" laps" : "—"}</div></div>
+            <div style={{fontSize:13,fontWeight:900,color:d==null?palette.muted:d>0?palette.red:palette.green,...mono}}>{d==null?"—":(d>0?"+":"")+fmt(d,2)+"s"}</div>
+          </div>;
+        })}
+      </div>
+      <div style={{...card,overflow:"hidden"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px 10px"}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>LIVE TIMING TOWER</div><div style={{fontSize:9,color:palette.muted}}>TOP 12 · SORTED BY RUNNING POSITION</div></div>
+        <div style={{display:"grid",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,padding:"7px 10px",background:palette.panel2,borderTop:"1px solid "+palette.line,borderBottom:"1px solid "+palette.line,fontSize:8,fontWeight:900,letterSpacing:.7,color:palette.muted}}>
+          <span>POS</span><span>DRIVER</span><span style={{textAlign:"right"}}>GAP*</span><span style={{textAlign:"right"}}>LAST</span><span style={{textAlign:"right"}}>5-LAP</span>
+        </div>
+        {ordered.slice(0,12).map(name => {
+          const p=TIMING[name]||{}, active=name===primary;
+          return <button key={name} onClick={()=>onSelectDriver(name)} style={{display:"grid",width:"100%",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,alignItems:"center",padding:"10px",textAlign:"left",border:0,borderBottom:"1px solid "+palette.line,background:active?(dark?"#173452":"#e5f2ff"):"transparent",color:palette.text,cursor:"pointer"}}>
+            <span style={{fontSize:13,fontWeight:900,color:active?palette.accent:palette.muted,...mono}}>{SIM_POS[name]||"—"}</span>
+            <span style={{minWidth:0}}><span style={{display:"block",fontSize:11,fontWeight:850,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{NUM[name]||"?"} {name}</span><span style={{display:"block",fontSize:8,color:palette.muted,marginTop:2}}>{p.laps_completed??"—"} LAPS</span></span>
+            <span style={{textAlign:"right",fontSize:10,fontWeight:800,...mono}}>{p.delta_leader==null?"—":fmt(p.delta_leader,1)}</span>
+            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(LAST_LAP_TIME[name])}</span>
+            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(BEST[name]?.t5)}</span>
+          </button>;
+        })}
+        <div style={{padding:"9px 11px",fontSize:9,lineHeight:1.5,color:palette.muted,borderTop:"1px solid "+palette.line}}>* GAP is NASCAR feed delta to leader, where supplied. Relative gap to selected driver is calculated only when both cars have the same completed-lap count. Last and 5-lap pace are calculated from public lap history, not official live timing.</div>
+      </div>
+    </section>
+  );
+}
+
 /* ═══ MAIN ═══ */
 export default function App() {
   const live = useLiveSession();
@@ -726,12 +809,13 @@ export default function App() {
       {mode === "race" && session?.session_type !== 'practice1' && session?.session_type !== 'practice2' && (
         <>
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
-            {["Race Control", "Timing", "Lap Chart", "Driver Intel", "Strategy"].map((t, i) => (
+            {["Race Command", "Timing Tower", "Lap Chart", "Driver Engineering", "Strategy"].map((t, i) => (
               <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "10px", background: "transparent", color: tab === i ? acc : sub, border: "none", borderBottom: tab === i ? `2px solid ${acc}` : "2px solid transparent", fontSize: 10, fontWeight: 700, cursor: "pointer", height: TH }}>{t}</button>
             ))}
           </div>
 
-          {tab === 0 && (
+          {tab === 0 && <RaceCommandCockpit session={session} NAMES={NAMES} NUM={NUM} SIM_POS={SIM_POS} TIMING={TIMING} LAST_LAP_TIME={LAST_LAP_TIME} BEST={BEST} STINT={STINT} primary={primaryResolved} onSelectDriver={setPrimary} dark={dark} status={status} />}
+          {tab === 0 && false && (
             <div style={{ padding: "0 10px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", marginBottom: 6 }}>
                 <div style={{ display: "flex", gap: 0, borderRadius: 5, overflow: "hidden", border: `1px solid ${bdr}` }}>
