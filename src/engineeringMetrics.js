@@ -182,20 +182,42 @@ export function formatOfficialLeaderGap(driver, leader) {
   if (!driver || !leader) return null;
   const driverLaps = Number(driver.laps_completed);
   const leaderLaps = Number(leader.laps_completed);
-  if (Number.isFinite(driverLaps) && Number.isFinite(leaderLaps)) {
-    const lapDifference = leaderLaps - driverLaps;
-    if (lapDifference > 0) {
-      return { label: `${lapDifference} lap${lapDifference === 1 ? "" : "s"} down`, type: "laps", value: lapDifference };
-    }
-    if (lapDifference < 0) {
-      return { label: `${Math.abs(lapDifference)} lap${Math.abs(lapDifference) === 1 ? "" : "s"} ahead`, type: "laps", value: lapDifference };
-    }
+  const hasLapCounts = Number.isFinite(driverLaps) && Number.isFinite(leaderLaps);
+  const lapDifference = hasLapCounts ? leaderLaps - driverLaps : null;
+
+  // vehicle_elapsed_time is the feed's cumulative elapsed-time measure. Unlike
+  // delta_leader, it remains useful when the selected car is one or more laps down.
+  const driverElapsed = Number(driver.vehicle_elapsed_time);
+  const leaderElapsed = Number(leader.vehicle_elapsed_time);
+  const elapsedGap = driver.vehicle_elapsed_time != null && leader.vehicle_elapsed_time != null &&
+    Number.isFinite(driverElapsed) && Number.isFinite(leaderElapsed)
+    ? Math.abs(driverElapsed - leaderElapsed)
+    : null;
+
+  if (lapDifference > 0) {
+    const lapLabel = `${lapDifference} lap${lapDifference === 1 ? "" : "s"} down`;
+    return {
+      label: elapsedGap != null ? `${lapLabel} · ${elapsedGap.toFixed(1)}s` : lapLabel,
+      type: "laps",
+      value: lapDifference,
+      timeGapSeconds: elapsedGap,
+    };
+  }
+  if (lapDifference < 0) {
+    const lapsAhead = Math.abs(lapDifference);
+    const lapLabel = `${lapsAhead} lap${lapsAhead === 1 ? "" : "s"} ahead`;
+    return {
+      label: elapsedGap != null ? `${lapLabel} · ${elapsedGap.toFixed(1)}s` : lapLabel,
+      type: "laps",
+      value: lapDifference,
+      timeGapSeconds: elapsedGap,
+    };
   }
   const delta = Number(driver.delta_leader);
   if (driver.delta_leader == null || !Number.isFinite(delta) || delta < 0) return null;
   return delta === 0
-    ? { label: "LEADER", type: "leader", value: 0 }
-    : { label: `${delta.toFixed(2)}s`, type: "seconds", value: delta };
+    ? { label: "LEADER", type: "leader", value: 0, timeGapSeconds: 0 }
+    : { label: `${delta.toFixed(2)}s`, type: "seconds", value: delta, timeGapSeconds: delta };
 }
 
 export function compareOfficialTiming(primary, competitor) {
