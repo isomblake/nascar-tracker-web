@@ -640,11 +640,11 @@ export default function App() {
   };
 
   return (
-    <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto", overflowX: "hidden" }}>
+    <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", width: "100%", maxWidth: 1100, margin: "0 auto", overflowX: "hidden", boxSizing: "border-box" }}>
       {/* HEADER — title row only; no mode buttons to prevent horizontal overflow */}
       <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", background: bg, position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>DRIVER COCKPIT</div>
+          <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "1px" }}>RACE ENGINEERING</div>
           <div style={{ fontSize: 10, color: sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {session?.track_name?.toUpperCase() || "—"}
             {session?.current_lap != null && session?.laps_in_race != null && session.laps_in_race > 0 && (
@@ -665,14 +665,19 @@ export default function App() {
             {status === 'no_session' && NAMES.length > 0 && (
               <span style={{ marginLeft: 6, color: sub }}>· REPLAY</span>
             )}
+            {session?.last_poll_at && (() => {
+              const age = Math.max(0, Math.round((Date.now() - new Date(session.last_poll_at).getTime()) / 1000));
+              const stale = age > 90;
+              return <span style={{ marginLeft: 6, color: stale ? "#ef4444" : sub }}>· UPDATED {age}s AGO</span>;
+            })()}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {["Race", "Practice", "History"].map((m) => (
-            <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 52, height: 40, padding: "0 10px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
-          ))}
+          <select value={primaryResolved} onChange={(e) => setPrimary(e.target.value)} aria-label="Selected driver" style={{ maxWidth: 138, height: 38, padding: "0 7px", borderRadius: 6, background: card, color: fg, border: `1px solid ${bdr}`, fontSize: 10, fontWeight: 700 }}>
+            {NAMES.map((name) => <option key={name} value={name}>#{NUM[name] || "?"} {sn(name)}</option>)}
+          </select>
           <SessionControl session={session} dark={dark} onAfterAction={live.reload} compact />
-          <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 40, height: 40, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
+          <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 38, height: 38, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
         </div>
       </div>
 
@@ -721,7 +726,7 @@ export default function App() {
       {mode === "race" && session?.session_type !== 'practice1' && session?.session_type !== 'practice2' && (
         <>
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
-            {["Cockpit", "Full Field", "Chart", "Performance"].map((t, i) => (
+            {["Race Control", "Timing", "Lap Chart", "Driver Intel", "Strategy"].map((t, i) => (
               <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "10px", background: "transparent", color: tab === i ? acc : sub, border: "none", borderBottom: tab === i ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
             ))}
           </div>
@@ -903,6 +908,102 @@ export default function App() {
         </>
       )}
 
+          {mode === "race" && tab === 4 && (() => {
+            const selectedTiming = TIMING[primaryResolved] || {};
+            const driverStops = PIT_STOPS[primaryResolved] || [];
+            const lastStop = driverStops[driverStops.length - 1] || null;
+            const currentLap = Number(selectedTiming.laps_completed ?? session?.current_lap ?? 0) || null;
+            const lapsSinceStop = lastStop && currentLap != null ? Math.max(0, currentLap - Number(lastStop.lap_number)) : null;
+            const currentRun = RUN_ANALYSIS?.[primaryResolved]?.runs?.slice(-1)[0] || null;
+            const fieldPitCycle = NAMES.map((name) => {
+              const stops = PIT_STOPS[name] || [];
+              const stop = stops[stops.length - 1] || null;
+              const timing = TIMING[name] || {};
+              return {
+                name,
+                position: SIM_POS[name] || 99,
+                lastPitLap: stop ? Number(stop.lap_number) : null,
+                lapsSincePit: stop && Number(timing.laps_completed) ? Number(timing.laps_completed) - Number(stop.lap_number) : null,
+                stop,
+              };
+            }).sort((a, b) => (b.lastPitLap ?? -1) - (a.lastPitLap ?? -1));
+            const stopDetails = lastStop?.details || {};
+            const changedTires = ["left_front_tire_changed","left_rear_tire_changed","right_front_tire_changed","right_rear_tire_changed"].filter((key) => stopDetails[key] === true).length;
+            const panel = (title, body) => <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 10, padding: 12, marginBottom: 10 }}><div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.6, marginBottom: 8 }}>{title}</div>{body}</div>;
+            return (
+              <div style={{ padding: "12px 10px 24px", maxWidth: 900, margin: "0 auto" }}>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 15, fontWeight: 900 }}>RACE STRATEGY & PIT CYCLE</div>
+                  <div style={{ fontSize: 10, color: sub }}>Race context and observed pit activity — not a fuel or tire sensor</div>
+                </div>
+                {panel("RACE SITUATION", <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 7 }}>
+                  {[
+                    ["LAP", currentLap == null ? "—" : currentLap + (session?.laps_in_race ? " / " + session.laps_in_race : "")],
+                    ["STAGE", session?.stage ?? "—"],
+                    ["LAPS TO GO", session?.laps_to_go ?? "—"],
+                  ].map(([label,value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 8 }}>
+                    <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, ...MF }}>{value}</div>
+                  </div>)}
+                </div>)}
+                {panel("SELECTED DRIVER · PIT STOP", lastStop ? (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 7 }}>
+                      {[
+                        ["LAST STOP", "Lap " + lastStop.lap_number],
+                        ["PIT ROAD", stopDetails.total_duration != null ? Number(stopDetails.total_duration).toFixed(2) + "s" : "—"],
+                        ["BOX TIME", stopDetails.pit_stop_duration != null ? Number(stopDetails.pit_stop_duration).toFixed(2) + "s" : "—"],
+                        ["TIRES", changedTires ? changedTires + " changed" : stopDetails.pit_stop_type || "Unknown"],
+                        ["STINT AGE", lapsSinceStop == null ? "—" : lapsSinceStop + " laps"],
+                        ["POSITION Δ", stopDetails.positions_gained ?? stopDetails.positions_gained_lossed ?? "—"],
+                      ].map(([label,value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 8 }}>
+                        <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, ...MF }}>{value}</div>
+                      </div>)}
+                    </div>
+                    <div style={{ fontSize: 8, color: sub, marginTop: 7 }}>Tire count and pit-stop timing reflect the public feed record. A missing field means NASCAR did not supply that value to this app.</div>
+                  </>
+                ) : <div style={{ fontSize: 10, color: sub }}>No pit-stop event has been recorded for this driver in the current session.</div>)}
+                {panel("CURRENT RUN PACE", currentRun?.summary ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 7 }}>
+                    {[
+                      ["RUN LAPS", currentRun.laps.length],
+                      ["AVG LAP", currentRun.summary.average.toFixed(3)],
+                      ["TREND", currentRun.summary.trendSecondsPerLap == null ? "—" : (currentRun.summary.trendSecondsPerLap > 0 ? "+" : "") + currentRun.summary.trendSecondsPerLap.toFixed(3) + "s/lap"],
+                    ].map(([label,value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 8 }}>
+                      <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, ...MF }}>{value}</div>
+                    </div>)}
+                  </div>
+                ) : <div style={{ fontSize: 10, color: sub }}>Insufficient clean lap data for a current-run summary.</div>)}
+                {panel("FIELD PIT CYCLE", (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, ...MF }}>
+                      <thead><tr style={{ color: sub, textAlign: "right" }}>
+                        <th style={{ textAlign: "left", padding: "6px 4px" }}>DRIVER</th>
+                        <th style={{ padding: "6px 4px" }}>POS</th>
+                        <th style={{ padding: "6px 4px" }}>LAST PIT</th>
+                        <th style={{ padding: "6px 4px" }}>STINT</th>
+                        <th style={{ padding: "6px 4px" }}>PIT ROAD</th>
+                      </tr></thead>
+                      <tbody>{fieldPitCycle.map((row) => (
+                        <tr key={row.name} style={{ borderTop: `1px solid ${bdr}`, textAlign: "right", background: row.name === primaryResolved ? (dark ? "#ffffff0a" : "#eff6ff") : "transparent" }}>
+                          <td style={{ textAlign: "left", padding: "7px 4px", fontWeight: row.name === primaryResolved ? 800 : 500 }}>#{NUM[row.name] || "?"} {sn(row.name)}</td>
+                          <td style={{ padding: "7px 4px" }}>{row.position}</td>
+                          <td style={{ padding: "7px 4px" }}>{row.lastPitLap == null ? "—" : "L" + row.lastPitLap}</td>
+                          <td style={{ padding: "7px 4px" }}>{row.lapsSincePit == null ? "—" : row.lapsSincePit + "L"}</td>
+                          <td style={{ padding: "7px 4px" }}>{row.stop?.details?.total_duration != null ? Number(row.stop.details.total_duration).toFixed(1) + "s" : "—"}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                ))}
+                {panel("WHAT THIS APP CANNOT CONFIRM", <div style={{ fontSize: 10, color: sub, lineHeight: 1.55 }}>
+                  We do not have actual fuel remaining, fuel burn per lap, tire pressure, tire temperature, compound/set identification, or private team radio. The app can compare observed pit cycles and pace, but it will not issue a false "pit now" recommendation without those inputs.
+                </div>)}
+              </div>
+            );
+          })()}
           {mode === "race" && tab === 3 && (() => {
             const validDrivers = NAMES.filter((n) => EOR[n]?.t10 != null);
             const ranked = [...validDrivers].sort((a, b) => EOR[a].t10 - EOR[b].t10);
