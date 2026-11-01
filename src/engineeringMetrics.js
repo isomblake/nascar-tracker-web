@@ -130,14 +130,20 @@ export function compareLapByLap(primaryLaps, competitorLaps) {
   };
 }
 
-export function isTireChangePitStop(stop) {
+export function getPitStopTireCount(stop) {
   const details = stop?.details || stop || {};
   const keys = ["left_front_tire_changed", "left_rear_tire_changed", "right_front_tire_changed", "right_rear_tire_changed"];
   const flags = keys.map((key) => details[key]).filter((value) => typeof value === "boolean");
-  if (flags.some(Boolean)) return true;
-  if (flags.length === keys.length) return false;
+  if (flags.length) return flags.filter(Boolean).length;
   const type = String(details.pit_stop_type ?? details.stop_type ?? "").toUpperCase();
-  return type.includes("TIRE_CHANGE") || type.includes("WHEEL_CHANGE");
+  if (type.includes("FOUR_WHEEL_CHANGE")) return 4;
+  if (type.includes("TWO_WHEEL_CHANGE")) return 2;
+  return null;
+}
+
+export function isTireChangePitStop(stop) {
+  const count = getPitStopTireCount(stop);
+  return count != null && count > 0;
 }
 
 export function buildDriverRunAnalysis(laps, options = {}) {
