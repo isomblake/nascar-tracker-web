@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from './supabaseClient';
+import { normalizePracticeGroup } from './raceMetrics';
 
 // Track-independent lap classification:
 // - A "pit/outlier lap" is anything significantly slower than the driver's best.
@@ -418,7 +419,7 @@ function detectCautionLaps(rawLaps) {
       const dkey = d.driver_key;
       const dispName = d.full_name;
       NUM[dispName] = d.car_number || '?';
-      GROUPS[dispName] = d.practice_group || null;
+      GROUPS[dispName] = normalizePracticeGroup(d.practice_group);
 
       const rawDrv = byDriver[dkey] || [];
       const stats = computeDriverStats(rawDrv, cautionSet);
