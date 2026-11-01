@@ -5,6 +5,7 @@ import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
+import { compareRunsByTireAge, summarizeRun } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -284,7 +285,7 @@ function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggle
 /* ═══ MAIN ═══ */
 export default function App() {
   const live = useLiveSession();
-  const { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, NAMES, session, status, error, cautionSet } = live;
+  const { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, RUN_ANALYSIS, TIMING, PIT_STOPS, NAMES, session, status, error, cautionSet } = live;
   const isCaution = makeCautionCheck(cautionSet);
 
   const [dark, setDark] = useState(true);
@@ -350,7 +351,15 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [pView, setPView] = useState("dashboard");
   const [pGroup, setPGroup] = useState(0);
-  useEffect(() => { setPGroup(0); }, [session?.id, practHistSessionId]);
+  const [practiceCompareDriver, setPracticeCompareDriver] = useState("");
+  const [practicePrimaryRunIndex, setPracticePrimaryRunIndex] = useState(0);
+  const [practiceCompareRunIndex, setPracticeCompareRunIndex] = useState(0);
+  useEffect(() => {
+    setPGroup(0);
+    setPracticePrimaryRunIndex(0);
+    setPracticeCompareRunIndex(0);
+    setPracticeCompareDriver("");
+  }, [session?.id, practHistSessionId]);
   const [cDrivers, setCDrivers] = useState(new Set(["Brad Keselowski"]));
   const [fieldSort, setFieldSort] = useState("pos");
   const [compMode, setCompMode] = useState("last");
@@ -982,7 +991,18 @@ export default function App() {
         const pN = usingPH ? practHist.NUM : NUM;
         const pNA = usingPH ? practHist.NAMES : NAMES;
         const pC = usingPH ? practHist.CLR : CLR;
+        const pRUN = usingPH ? practHist.RUN_ANALYSIS : RUN_ANALYSIS;
         const pPri = pNA.includes(primaryResolved) ? primaryResolved : (pNA[0] || primaryResolved);
+        const primaryRuns = pRUN?.[pPri]?.runs || [];
+        const compareCandidates = pNA.filter((name) => name !== pPri && (pRUN?.[name]?.runs || []).length > 0);
+        const compareName = compareCandidates.includes(practiceCompareDriver)
+          ? practiceCompareDriver
+          : (compDrivers.find((name) => compareCandidates.includes(name)) || compareCandidates[0] || "");
+        const compareRuns = compareName ? (pRUN?.[compareName]?.runs || []) : [];
+        const primaryRun = primaryRuns[practicePrimaryRunIndex] || primaryRuns[primaryRuns.length - 1] || null;
+        const compareRun = compareRuns[practiceCompareRunIndex] || compareRuns[compareRuns.length - 1] || null;
+        const runComparison = primaryRun && compareRun ? compareRunsByTireAge(primaryRun, compareRun) : null;
+        const primaryRunSummary = primaryRun?.summary || summarizeRun(primaryRun);
         const pSess = usingPH ? practHist.session : session;
 
         // Chart data computed from the active practice source (historical or live)
@@ -1065,6 +1085,75 @@ export default function App() {
 
           {pView === "dashboard" && (
             <div style={{ padding: "0 12px" }}>
+              <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 10, padding: 12, marginTop: 10, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6 }}>RUN & TIRE-AGE ANALYSIS</div>
+                    <div style={{ fontSize: 9, color: sub, marginTop: 2 }}>Compare pace at similar run ages, not just session-best laps</div>
+                  </div>
+                  <span style={{ fontSize: 8, color: pRUN?.[pPri]?.hasOfficialPitEvents ? "#22c55e" : "#eab308", fontWeight: 700 }}>
+                    {pRUN?.[pPri]?.hasOfficialPitEvents ? "PIT DATA" : "RUN AGE EST."}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                  <label style={{ fontSize: 9, color: sub }}>Selected driver run
+                    <select value={String(practicePrimaryRunIndex)} onChange={(e) => setPracticePrimaryRunIndex(Number(e.target.value))} style={{ display: "block", width: "100%", marginTop: 3, padding: 7, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 5, fontSize: 10 }}>
+                      {primaryRuns.map((run, index) => <option key={run.runNumber} value={index}>Run {run.runNumber} · L{run.startLap}–{run.endLap} · {run.laps.length}L</option>)}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 9, color: sub }}>Compare driver
+                    <select value={compareName} onChange={(e) => { setPracticeCompareDriver(e.target.value); setPracticeCompareRunIndex(0); }} style={{ display: "block", width: "100%", marginTop: 3, padding: 7, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 5, fontSize: 10 }}>
+                      {compareCandidates.map((name) => <option key={name} value={name}>#{pN[name] || "?"} {name}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {compareRuns.length > 1 && (
+                  <label style={{ display: "block", fontSize: 9, color: sub, marginBottom: 8 }}>Comparison run
+                    <select value={String(practiceCompareRunIndex)} onChange={(e) => setPracticeCompareRunIndex(Number(e.target.value))} style={{ display: "block", width: "100%", marginTop: 3, padding: 7, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 5, fontSize: 10 }}>
+                      {compareRuns.map((run, index) => <option key={run.runNumber} value={index}>Run {run.runNumber} · L{run.startLap}–{run.endLap} · {run.laps.length}L</option>)}
+                    </select>
+                  </label>
+                )}
+                {primaryRun && primaryRunSummary ? (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 5, marginBottom: 8 }}>
+                      {[
+                        ["AVG LAP", primaryRunSummary.average.toFixed(3)],
+                        ["MEDIAN", primaryRunSummary.median.toFixed(3)],
+                        ["CONSISTENCY", primaryRunSummary.standardDeviation.toFixed(3) + "σ"],
+                      ].map(([label, value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 7 }}>
+                        <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                        <div style={{ fontSize: 13, color: fg, fontWeight: 800, ...MF }}>{value}</div>
+                      </div>)}
+                    </div>
+                    <div style={{ fontSize: 9, color: sub, marginBottom: 6 }}>
+                      {pPri} Run {primaryRun.runNumber}: {primaryRun.laps.length} clean laps · L{primaryRun.startLap}–{primaryRun.endLap} ·
+                      {" "}{primaryRun.tireAgeConfidence === "higher" ? "pit-stop recorded" : "run age inferred"}
+                      {primaryRunSummary.firstToLastFiveDelta != null ? ` · first 5 to last 5: ${primaryRunSummary.firstToLastFiveDelta > 0 ? "+" : ""}${primaryRunSummary.firstToLastFiveDelta.toFixed(3)}s` : ""}
+                    </div>
+                    {runComparison && (
+                      <div style={{ borderTop: `1px solid ${bdr}`, paddingTop: 7 }}>
+                        <div style={{ fontSize: 9, fontWeight: 800, marginBottom: 5 }}>AVERAGE LAP DELTA BY TIRE AGE</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 3 }}>
+                          {runComparison.comparisons.map((item) => (
+                            <div key={item.startAge} style={{ textAlign: "center", background: dark ? "#ffffff08" : "#00000006", borderRadius: 5, padding: 5 }}>
+                              <div style={{ fontSize: 7, color: sub }}>{item.startAge}–{item.endAge}L</div>
+                              <div style={{ fontSize: 10, fontWeight: 800, color: item.deltaSecondsPerLap == null ? sub : item.deltaSecondsPerLap < 0 ? "#22c55e" : item.deltaSecondsPerLap > 0 ? "#ef4444" : fg, ...MF }}>
+                                {item.deltaSecondsPerLap == null ? "—" : (item.deltaSecondsPerLap > 0 ? "+" : "") + item.deltaSecondsPerLap.toFixed(3)}
+                              </div>
+                              <div style={{ fontSize: 7, color: sub }}>{item.matchedLaps}/{item.endAge - item.startAge + 1}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 8, color: sub, marginTop: 5 }}>Delta = selected driver minus comparison driver. Negative means the selected driver was faster. Each window requires at least 80% matched laps.</div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 10, color: sub }}>Not enough clean lap data to form a comparable run yet.</div>
+                )}
+                <div style={{ fontSize: 8, color: sub, marginTop: 7 }}>Tire age is confirmed only when NASCAR pit-stop data identifies a stop. Otherwise run boundaries are inferred from lap-time outliers or missing laps; inferred run age is not proof of a tire change.</div>
+              </div>
               <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "center", marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
                 {[{ l: "All", v: 0 }, ...[1, 2].filter((group) => pNA.some((n) => pG[n] === group)).map((group) => ({ l: "Group " + group, v: group }))].map((g) => (
                   <button key={g.v} onClick={() => setPGroup(g.v)} style={{ padding: "6px 16px", borderRadius: 4, background: pGroup === g.v ? acc : "transparent", color: pGroup === g.v ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{g.l}</button>
