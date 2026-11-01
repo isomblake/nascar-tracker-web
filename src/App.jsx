@@ -35,6 +35,13 @@ const thrFor = (BEST, driver) => {
 /* ═══ HELPERS ═══ */
 const sn = (n) => (n ? n.split(" ").pop() : "—");
 const ft = (t) => (t != null ? t.toFixed(3) : "—");
+const pitRoadDuration = (details) => {
+  if (details?.total_duration != null && Number.isFinite(Number(details.total_duration))) return Number(details.total_duration);
+  if (details?.pit_in_elapsed_time == null || details?.pit_out_elapsed_time == null) return null;
+  const pitIn = Number(details.pit_in_elapsed_time);
+  const pitOut = Number(details.pit_out_elapsed_time);
+  return Number.isFinite(pitIn) && Number.isFinite(pitOut) && pitOut >= pitIn ? pitOut - pitIn : null;
+};
 const MF = { fontFamily: "'SF Mono','Consolas',monospace", letterSpacing: "0.5px" };
 
 const rkColor = (r) => (r == null ? "#555" : r <= 3 ? "#22c55e" : r <= 10 ? "#eab308" : "#ef4444");
@@ -1041,7 +1048,7 @@ export default function App() {
                     <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 7 }}>
                       {[
                         ["LAST STOP", "Lap " + lastStop.lap_number],
-                        ["PIT ROAD", stopDetails.total_duration != null ? Number(stopDetails.total_duration).toFixed(2) + "s" : "—"],
+                        ["PIT ROAD", pitRoadDuration(stopDetails) != null ? pitRoadDuration(stopDetails).toFixed(2) + "s" : "—"],
                         ["BOX TIME", stopDetails.pit_stop_duration != null ? Number(stopDetails.pit_stop_duration).toFixed(2) + "s" : "—"],
                         ["TIRES", changedTires ? changedTires + " changed" : stopDetails.pit_stop_type || "Unknown"],
                         ["STINT AGE", lapsSinceStop == null ? "—" : lapsSinceStop + " laps"],
@@ -1082,7 +1089,7 @@ export default function App() {
                           <td style={{ padding: "7px 4px" }}>{row.position}</td>
                           <td style={{ padding: "7px 4px" }}>{row.lastPitLap == null ? "—" : "L" + row.lastPitLap}</td>
                           <td style={{ padding: "7px 4px" }}>{row.lapsSincePit == null ? "—" : row.lapsSincePit + "L"}</td>
-                          <td style={{ padding: "7px 4px" }}>{row.stop?.details?.total_duration != null ? Number(row.stop.details.total_duration).toFixed(1) + "s" : "—"}</td>
+                          <td style={{ padding: "7px 4px" }}>{pitRoadDuration(row.stop?.details) != null ? pitRoadDuration(row.stop.details).toFixed(1) + "s" : "—"}</td>
                         </tr>
                       ))}</tbody>
                     </table>
@@ -1144,7 +1151,7 @@ export default function App() {
                   {metricCard("10-LAP VS FIELD MEDIAN", deltaText(medianDelta), "Negative = faster than field median")}
                   {metricCard("LAST 5 VS PRIOR 5", deltaText(trend), trend == null ? "Requires 10 consecutive clean laps" : trend < 0 ? "Pace improving" : trend > 0 ? "Pace slowing" : "No change")}
                   {metricCard("TIME TO LEADER", officialLeaderGap || "—", "Official timing · lapped cars shown as laps down")}
-                  {metricCard("LAST PIT STOP", latestPit ? "Lap " + latestPit.lap_number : "—", latestPit?.details?.total_duration != null ? Number(latestPit.details.total_duration).toFixed(1) + "s pit road" : "Pit event not supplied")}
+                  {metricCard("LAST PIT STOP", latestPit ? "Lap " + latestPit.lap_number : "—", pitRoadDuration(latestPit?.details) != null ? pitRoadDuration(latestPit.details).toFixed(1) + "s pit road" : "Pit duration unavailable")}
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
                   <div style={{ fontSize: 10, fontWeight: 800, marginBottom: 8 }}>POSITION BATTLE</div>
