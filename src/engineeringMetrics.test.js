@@ -4,6 +4,7 @@ import {
   compareRunsByTireAge,
   compareLapByLap,
   compareOfficialTiming,
+  formatOfficialLeaderGap,
   isTireChangePitStop,
 } from "./engineeringMetrics";
 
@@ -46,6 +47,28 @@ describe("engineeringMetrics", () => {
     );
     expect(result.gapSeconds).toBeCloseTo(1.3, 5);
     expect(result.source).toBe("difference-of-official-leader-deltas");
+  });
+
+  test("formats time to leader as seconds on the same lap and laps down otherwise", () => {
+    expect(formatOfficialLeaderGap(
+      { laps_completed: 443, delta_leader: 1.346 },
+      { laps_completed: 443, delta_leader: 0 }
+    )).toEqual({ label: "1.35s", type: "seconds", value: 1.346 });
+    expect(formatOfficialLeaderGap(
+      { laps_completed: 440, delta_leader: -3 },
+      { laps_completed: 443, delta_leader: 0 }
+    )).toEqual({ label: "3 laps down", type: "laps", value: 3 });
+    expect(formatOfficialLeaderGap(
+      { laps_completed: 443, delta_leader: 0 },
+      { laps_completed: 443, delta_leader: 0 }
+    )).toEqual({ label: "LEADER", type: "leader", value: 0 });
+  });
+
+  test("does not interpret negative NASCAR lap-down sentinel values as seconds", () => {
+    expect(compareOfficialTiming(
+      { laps_completed: 442, delta_leader: -1 },
+      { laps_completed: 442, delta_leader: -1 }
+    )).toBeNull();
   });
 
   test("returns lap-by-lap and cumulative time deltas", () => {
