@@ -201,7 +201,10 @@ export function useHistorySession(sessionId) {
       const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
       RUN_ANALYSIS[name] = buildDriverRunAnalysis(
         stats.laps,
-        { cautionLaps: [...cautionSet], pitLaps: driverPitStops.map((stop) => stop.lap_number) }
+        { cautionLaps: [...cautionSet], pitLaps: [
+          ...driverPitStops.map((stop) => stop.lap_number),
+          ...rawLaps.filter((row) => row.driver_key === dkey && row.is_pit === true).map((row) => row.lap_number),
+        ] }
       );
       PIT_STOPS[name] = driverPitStops;
       BEST[name] = stats.best;
