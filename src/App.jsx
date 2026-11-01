@@ -4,6 +4,7 @@ import { useLiveSession } from "./useLiveSession";
 import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
+import { compareRaceLaps } from "./raceMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -325,12 +326,14 @@ export default function App() {
     const seriesFilter = session?.series ?? 1;
     (async () => {
       try {
-        const { data, error } = await supabase
+        let practiceQuery = supabase
           .from('sessions')
           .select('id')
           .neq('started_by', 'historical')
           .in('session_type', ['practice1', 'practice2'])
-          .eq('series', seriesFilter)
+          .eq('series', seriesFilter);
+        if (session?.track_name) practiceQuery = practiceQuery.eq('track_name', session.track_name);
+        const { data, error } = await practiceQuery
           .order('started_at', { ascending: false })
           .limit(1);
         if (error) { console.error('practice auto-load:', error); return; }
@@ -339,7 +342,7 @@ export default function App() {
     })();
 
     return () => { cancelled = true; };
-  }, [session?.id, session?.is_active, session?.session_type, session?.series]);
+  }, [session?.id, session?.is_active, session?.session_type, session?.series, session?.track_name]);
 
   const [tab, setTab] = useState(0);
   const [primary, setPrimary] = useState("Brad Keselowski");
@@ -347,6 +350,7 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [pView, setPView] = useState("dashboard");
   const [pGroup, setPGroup] = useState(0);
+  useEffect(() => { setPGroup(0); }, [session?.id, practHistSessionId]);
   const [cDrivers, setCDrivers] = useState(new Set(["Brad Keselowski"]));
   const [fieldSort, setFieldSort] = useState("pos");
   const [compMode, setCompMode] = useState("last");
@@ -444,36 +448,18 @@ export default function App() {
     const lapCount = extraWindow === "all" ? 9999 : (extraWindow || 30);
 
     const theirThr = thrFor(BEST, name);
-    const theirCl = (LAPS[name] || []).filter(([n, t]) => t > 0 && t <= theirThr && !isCaution(n));
-    const myClLaps = myCl;
-    const cPairs = Math.min(myClLaps.length, theirCl.length, 5);
-    const myLL = myClLaps.length > 0 ? myClLaps[myClLaps.length - 1][1] : null;
-    const theirLL = theirCl.length > 0 ? theirCl[theirCl.length - 1][1] : null;
-    const d = (myLL != null && theirLL != null) ? myLL - theirLL : null;
+    const raceTiming = compareRaceLaps(LAPS[primaryResolved] || [], LAPS[name] || []);
+    const d = raceTiming.lastLapDelta;
     const dc = d == null ? sub : d > 0 ? "#ef4444" : "#22c55e";
 
     // All-lap maps (crossing-time gap and per-lap delta bars both use these)
     const myMap = new Map((LAPS[primaryResolved] || []).map(([n, t]) => [n, t]));
     const theirMap = new Map((LAPS[name] || []).map(([n, t]) => [n, t]));
 
-    // Gap trend: positive = my laps slower than theirs.
-    const gapPerLap = cPairs >= 3 ? (() => {
-      let t = 0;
-      for (let i = 0; i < cPairs; i++) {
-        t += myClLaps[myClLaps.length - 1 - i][1] - theirCl[theirCl.length - 1 - i][1];
-      }
-      return t / cPairs;
-    })() : null;
-
-    // Crossing-time gap: sum ALL laps (including pits/cautions) since that real elapsed time
-    // determines when each car actually crosses the line. Positive = primary crossed later = behind.
-    let cumulativeGap = 0;
-    let cumulativePairs = 0;
-    for (const [lap, myT] of myMap) {
-      const theirT = theirMap.get(lap);
-      if (theirT != null && myT > 0 && theirT > 0) { cumulativeGap += myT - theirT; cumulativePairs++; }
-    }
-    const hasCumGap = cumulativePairs >= 3;
+    // Positive pace delta means the primary driver is slower.
+    const gapPerLap = raceTiming.paceDelta5;
+    const cumulativeGap = raceTiming.gapSeconds;
+    const hasCumGap = cumulativeGap != null;
     const cumGapColor = cumulativeGap > 0 ? "#ef4444" : "#22c55e";
 
     // Trend label depends on whether they're ahead or behind of primary driver
@@ -541,25 +527,49 @@ export default function App() {
           </div>
           <div style={{ textAlign: "right" }}>
             <div style={{ fontSize: 9, color: sub }}>P{SIM_POS[name] || "?"}</div>
-            {hasCumGap ? (
+            {raceTiming.lapDelta != null && raceTiming.lapDelta !== 0 ? (
               <>
-                <div style={{ fontSize: 9, color: sub }}>GAP</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color: cumGapColor, ...MF, lineHeight: 1.1 }}>{Math.abs(cumulativeGap).toFixed(2)}s</div>
-                <div style={{ fontSize: 9, color: sub, marginTop: 3 }}>last lap</div>
-                <div style={{ fontSize: 13, fontWeight: 700, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
+                <div style={{ fontSize: 9, color: sub }}>LAP STATUS</div>
+                <div style={{ fontSize: 19, fontWeight: 800, color: raceTiming.lapDelta > 0 ? "#22c55e" : "#ef4444", ...MF }}>
+                  {Math.abs(raceTiming.lapDelta)} LAP{Math.abs(raceTiming.lapDelta) === 1 ? "" : "S"} {raceTiming.lapDelta > 0 ? "AHEAD" : "DOWN"}
+                </div>
+              </>
+            ) : hasCumGap ? (
+              <>
+                <div style={{ fontSize: 9, color: sub }}>CALCULATED GAP</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color: cumGapColor, ...MF, lineHeight: 1.1 }}>
+                  {Math.abs(cumulativeGap).toFixed(2)}s {cumulativeGap > 0 ? "BEHIND" : "AHEAD"}
+                </div>
+                <div style={{ fontSize: 8, color: sub }}>through lap {raceTiming.latestCommonLap}</div>
               </>
             ) : (
               <>
-                <div style={{ fontSize: 9, color: sub }}>last lap</div>
-                <div style={{ fontSize: 18, fontWeight: 800, color: dc, ...MF }}>{d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}</div>
+                <div style={{ fontSize: 9, color: sub }}>GAP</div>
+                <div style={{ fontSize: 18, fontWeight: 800, color: sub, ...MF }}>—</div>
               </>
             )}
+            <div style={{ fontSize: 9, color: sub, marginTop: 4 }}>LAST MATCHED LAP Δ · L{raceTiming.latestCommonLap ?? "—"}</div>
+            <div style={{ fontSize: 13, fontWeight: 700, color: dc, ...MF }}>
+              {d != null ? (d > 0 ? "+" : "") + d.toFixed(3) : "—"}
+            </div>
           </div>
         </div>
 
         {trendLabel != null && (
           <div style={{ padding: "4px 8px", borderRadius: 4, marginTop: 8, background: trendColor + "20", fontSize: 10, color: trendColor, fontWeight: 700 }}>
             {trendLabel} {Math.abs(gapPerLap).toFixed(3)}s/lap
+          </div>
+        )}
+        {(raceTiming.paceDelta5 != null || raceTiming.paceDelta10 != null) && (
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginTop: 8 }}>
+            {[["5-LAP PACE Δ", raceTiming.paceDelta5], ["10-LAP PACE Δ", raceTiming.paceDelta10]].map(([label, value]) => (
+              <div key={label} style={{ padding: "6px 8px", background: dark ? "#ffffff06" : "#00000006", borderRadius: 5 }}>
+                <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                <div style={{ fontSize: 12, fontWeight: 700, color: value == null ? sub : value > 0 ? "#ef4444" : "#22c55e", ...MF }}>
+                  {value == null ? "—" : (value > 0 ? "+" : "") + value.toFixed(3) + "s"}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -625,7 +635,7 @@ export default function App() {
       {/* HEADER — title row only; no mode buttons to prevent horizontal overflow */}
       <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", background: bg, position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>RACE ANALYTICS</div>
+          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>DRIVER COCKPIT</div>
           <div style={{ fontSize: 10, color: sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {session?.track_name?.toUpperCase() || "—"}
             {session?.current_lap != null && session?.laps_in_race != null && session.laps_in_race > 0 && (
@@ -702,7 +712,7 @@ export default function App() {
       {mode === "race" && session?.session_type !== 'practice1' && session?.session_type !== 'practice2' && (
         <>
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
-            {["Dashboard", "Full Field", "Chart"].map((t, i) => (
+            {["Cockpit", "Full Field", "Chart"].map((t, i) => (
               <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "10px", background: "transparent", color: tab === i ? acc : sub, border: "none", borderBottom: tab === i ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
             ))}
           </div>
@@ -804,6 +814,7 @@ export default function App() {
               </div>
 
               <div style={{ fontSize: 9, color: sub, fontWeight: 700, letterSpacing: 1, marginBottom: 4 }}>POSITION BATTLE</div>
+              <div style={{ fontSize: 8, color: sub, marginBottom: 6 }}>Gap is calculated from matched lap times, not a direct NASCAR interval feed. It updates through the latest lap completed by both cars.</div>
               <RaceComp label="Car Ahead" emoji="▲" name={aheadName} borderColor="#22c55e" />
               <RaceComp label="Car Behind" emoji="▼" name={behindName} borderColor="#ef4444" isBehind />
 
@@ -977,13 +988,18 @@ export default function App() {
           {pView === "dashboard" && (
             <div style={{ padding: "0 12px" }}>
               <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "center", marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
-                {[{ l: "All", v: 0 }, { l: "Group 1", v: 1 }, { l: "Group 2", v: 2 }].map((g) => (
+                {[{ l: "All", v: 0 }, ...[1, 2].filter((group) => pNA.some((n) => pG[n] === group)).map((group) => ({ l: "Group " + group, v: group }))].map((g) => (
                   <button key={g.v} onClick={() => setPGroup(g.v)} style={{ padding: "6px 16px", borderRadius: 4, background: pGroup === g.v ? acc : "transparent", color: pGroup === g.v ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{g.l}</button>
                 ))}
                 <select value={extraWindow || ""} onChange={(e) => setExtraWindow(e.target.value || null)} style={{ padding: 4, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 4, fontSize: 10 }}>
                   <option value="">30L</option><option value="35">35L</option><option value="40">40L</option><option value="50">50L</option><option value="75">75L</option><option value="100">100L</option>
                 </select>
               </div>
+              {!pNA.some((n) => pG[n] != null) && (
+                <div style={{ fontSize: 10, color: sub, margin: "-4px 0 10px", textAlign: "center" }}>
+                  No practice group assignments were supplied for this session. Showing the full field.
+                </div>
+              )}
 
               <div style={{ background: dark ? acc + "10" : acc + "08", border: `1px solid ${acc}`, borderRadius: 10, padding: 12, marginBottom: 16 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
