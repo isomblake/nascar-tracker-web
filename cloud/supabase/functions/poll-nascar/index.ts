@@ -24,6 +24,12 @@ interface Session {
   current_lap: number | null;
 }
 
+function numberOrNull(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
 async function fetchJson(url: string): Promise<any | null> {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(5000) });
@@ -142,13 +148,13 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
         session_id: session.id,
         driver_key: driverKey,
         position: Number(position),
-        laps_completed: Number(vehicle.laps_completed ?? vehicle.LapsCompleted ?? 0) || null,
-        delta_leader: Number.isFinite(Number(vehicle.delta)) ? Number(vehicle.delta) : null,
-        vehicle_elapsed_time: Number.isFinite(Number(vehicle.vehicle_elapsed_time)) ? Number(vehicle.vehicle_elapsed_time) : null,
-        last_lap_time: Number.isFinite(Number(vehicle.last_lap_time)) ? Number(vehicle.last_lap_time) : null,
-        last_lap_speed: Number.isFinite(Number(vehicle.last_lap_speed)) ? Number(vehicle.last_lap_speed) : null,
-        average_running_position: Number.isFinite(Number(vehicle.average_running_position)) ? Number(vehicle.average_running_position) : null,
-        average_speed: Number.isFinite(Number(vehicle.average_speed)) ? Number(vehicle.average_speed) : null,
+        laps_completed: numberOrNull(vehicle.laps_completed ?? vehicle.LapsCompleted),
+        delta_leader: numberOrNull(vehicle.delta),
+        vehicle_elapsed_time: numberOrNull(vehicle.vehicle_elapsed_time),
+        last_lap_time: numberOrNull(vehicle.last_lap_time),
+        last_lap_speed: numberOrNull(vehicle.last_lap_speed),
+        average_running_position: numberOrNull(vehicle.average_running_position),
+        average_speed: numberOrNull(vehicle.average_speed),
         pit_stops_count: pitStops.length,
         last_pit_lap: lastPit ? Number(lastPit.pit_in_lap_count ?? lastPit.pit_in_leader_lap ?? 0) || null : null,
         last_pit_total_duration: lastPit && Number.isFinite(Number(lastPit.total_duration)) ? Number(lastPit.total_duration) : null,
