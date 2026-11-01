@@ -9,6 +9,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
+import { buildDriverRunAnalysis } from './engineeringMetrics';
 
 const PIT_MARGIN_SECONDS = 5;
 const ABSOLUTE_MAX_LAP = 300;
@@ -112,6 +113,7 @@ export function useHistorySession(sessionId) {
   const [session, setSession] = useState(null);
   const [drivers, setDrivers] = useState([]);
   const [rawLaps, setRawLaps] = useState([]);
+  const [rawPitStops, setRawPitStops] = useState([]);
   const [status, setStatus] = useState('idle'); // idle | loading | loaded | error
 
   useEffect(() => {
@@ -158,8 +160,15 @@ export function useHistorySession(sessionId) {
           if (chunk.length < PAGE) break;
           from += PAGE;
         }
+        const { data: pitStops } = await supabase
+          .from('race_events')
+          .select('driver_key, lap_number, details, recorded_at')
+          .eq('session_id', sessionId)
+          .eq('event_type', 'pit_stop')
+          .order('lap_number', { ascending: true });
         if (!cancelled) {
           setRawLaps(all);
+          setRawPitStops(pitStops || []);
           setStatus('loaded');
         }
       } catch {
@@ -172,6 +181,7 @@ export function useHistorySession(sessionId) {
 
   const derived = useMemo(() => {
     const cautionSet = detectCautionLaps(rawLaps);
+    rawLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
     const byDriver = {};
     for (const row of rawLaps) {
       if (!byDriver[row.driver_key]) byDriver[row.driver_key] = [];
@@ -187,6 +197,12 @@ export function useHistorySession(sessionId) {
       GROUPS[name] = normalizePracticeGroup(d.practice_group);
 
       const stats = computeDriverStats(byDriver[dkey] || [], cautionSet);
+      const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
+      RUN_ANALYSIS[name] = buildDriverRunAnalysis(
+        stats.laps,
+        { cautionLaps: [...cautionSet], pitLaps: driverPitStops.map((stop) => stop.lap_number) }
+      );
+      PIT_STOPS[name] = driverPitStops;
       BEST[name] = stats.best;
       EOR[name] = stats.eor;
       LAPS[name] = stats.laps;
@@ -199,8 +215,8 @@ export function useHistorySession(sessionId) {
       .map((d) => d.full_name)
       .sort((a, b) => (parseInt(NUM[a], 10) || 99) - (parseInt(NUM[b], 10) || 99));
 
-    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, NAMES, cautionSet };
-  }, [drivers, rawLaps]);
+    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, RUN_ANALYSIS, PIT_STOPS, NAMES, cautionSet };
+  }, [drivers, rawLaps, rawPitStops]);
 
-  return { session, status, ...derived };
+  return { session, status, rawPitStops, ...derived };
 }
