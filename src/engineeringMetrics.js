@@ -128,3 +128,32 @@ export function compareLapByLap(primaryLaps, competitorLaps) {
     cumulativeDeltaSeconds: rows.length ? cumulativeDelta : null,
   };
 }
+
+export function buildDriverRunAnalysis(laps, options = {}) {
+  const cautionLaps = toSet(options.cautionLaps);
+  const explicitPitLaps = toSet(options.pitLaps);
+  const validTimes = (laps || []).map((row) => Number(row?.[1])).filter((time) => Number.isFinite(time) && time > 0 && time < 300);
+  const best = validTimes.length ? Math.min(...validTimes) : null;
+  const hasOfficialPitEvents = explicitPitLaps.size > 0;
+  const inferredPitLaps = new Set();
+  if (!hasOfficialPitEvents && best != null) {
+    for (const row of laps || []) {
+      const lap = Number(row?.[0]);
+      const time = Number(row?.[1]);
+      if (Number.isInteger(lap) && time > best + 20 && !cautionLaps.has(lap)) inferredPitLaps.add(lap);
+    }
+  }
+  const pitLaps = new Set([...explicitPitLaps, ...inferredPitLaps]);
+  const runs = splitLapsIntoRuns(laps, { pitLaps: [...pitLaps], cautionLaps: [...cautionLaps] });
+  return {
+    runs: runs.map((run) => ({
+      ...run,
+      summary: summarizeRun(run),
+      tireAgeBasis: hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
+      tireAgeConfidence: hasOfficialPitEvents ? "higher" : "estimated",
+    })),
+    pitLaps: [...pitLaps].sort((a, b) => a - b),
+    hasOfficialPitEvents,
+    tireAgeBasis: hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
+  };
+}
