@@ -228,6 +228,7 @@ serve(async (req) => {
 
     // ── Fetch lap data ───────────────────────────────────────────
     let lapData: any = null;
+    let liveDataForEvents: any = null;
     let pickedRace: typeof candidates[0] | null = null;
 
     if (isPractice) {
@@ -239,6 +240,7 @@ serve(async (req) => {
         const hasLaps = vehicles.length > 0 && vehicles.some((v: any) => (v.laps ?? v.Laps ?? []).length > 0);
         if (data && hasLaps) {
           lapData = data;
+          liveDataForEvents = data;
           pickedRace = race;
           break;
         }
@@ -247,9 +249,11 @@ serve(async (req) => {
       // Race: lap data in lap-times.json
       for (const race of candidates.slice(0, 5)) {
         const lapUrl = `https://cf.nascar.com/cacher/live/series_${series}/${race.raceId}/lap-times.json`;
-        const data = await fetchJson(lapUrl);
+        const liveUrl = `https://cf.nascar.com/cacher/live/series_${series}/${race.raceId}/live-feed.json`;
+        const [data, liveData] = await Promise.all([fetchJson(lapUrl), fetchJson(liveUrl)]);
         if (data && (Array.isArray(data.laps) || Array.isArray(data.Laps)) && (data.laps ?? data.Laps).length > 0) {
           lapData = data;
+          liveDataForEvents = liveData;
           pickedRace = race;
           break;
         }
@@ -292,6 +296,7 @@ serve(async (req) => {
     // ── Import drivers and laps ──────────────────────────────────
     const driverRows: any[] = [];
     const lapRows: any[] = [];
+    const pitEventRows: any[] = [];
 
     if (isPractice) {
       // Practice: extract from vehicles array
@@ -349,6 +354,27 @@ serve(async (req) => {
       }
     }
 
+    const pitVehicles: any[] = liveDataForEvents?.vehicles ?? liveDataForEvents?.Vehicles ?? [];
+    for (const vehicle of pitVehicles) {
+      const driverKey = String(vehicle.NASCARDriverID ?? vehicle.driver?.NASCARDriverID ?? vehicle.vehicle_number ?? "");
+      const stops: any[] = vehicle.pit_stops ?? vehicle.PitStops ?? [];
+      for (const stop of stops) {
+        const pitLap = Number(stop.pit_in_lap_count ?? stop.pit_in_leader_lap ?? 0);
+        if (!driverKey || !Number.isInteger(pitLap) || pitLap <= 0) continue;
+        pitEventRows.push({
+          session_id: sessionRow.id,
+          event_type: "pit_stop",
+          lap_number: pitLap,
+          driver_key: driverKey,
+          details: {
+            ...stop,
+            car_number: String(vehicle.vehicle_number ?? vehicle.Number ?? ""),
+            driver_name: vehicle.driver?.full_name ?? vehicle.driver?.FullName ?? vehicle.FullName ?? "",
+          },
+        });
+      }
+    }
+
     if (driverRows.length > 0) {
       await supabase
         .from("drivers")
@@ -362,6 +388,11 @@ serve(async (req) => {
         .from("laps")
         .upsert(lapRows.slice(i, i + CHUNK), { onConflict: "session_id,driver_key,lap_number" });
       if (!error) lapsInserted += CHUNK;
+    }
+
+    if (pitEventRows.length > 0) {
+      const { error: pitError } = await supabase.from("race_events").insert(pitEventRows);
+      if (pitError) throw new Error("Pit-event import failed: " + pitError.message);
     }
 
     return new Response(
