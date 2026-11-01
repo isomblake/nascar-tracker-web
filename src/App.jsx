@@ -5,7 +5,7 @@ import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
-import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap, getPitStopTireCount } from "./engineeringMetrics";
+import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap, estimatePaceDeficitPerLap, getPitStopTireCount } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -292,6 +292,29 @@ function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggle
 
 /* ═══ RACE COMMAND COCKPIT ═══ */
 function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, EOR, STINT, primary, onSelectDriver, dark, status }) {
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoScenario, setDemoScenario] = useState("3 laps down");
+  const demoNames = ["Kyle Larson", "William Byron", "Denny Hamlin", "Ryan Blaney", "Brad Keselowski", "Chase Elliott"];
+  const demoLapsDown = demoScenario === "1 lap down" ? 1 : demoScenario === "2 laps down" ? 2 : demoScenario === "on lead lap" ? 0 : 3;
+  const demoPace = demoScenario === "gaining" ? 29.4 : demoScenario === "on lead lap" ? 29.8 : 30.2;
+  const displayNames = demoMode ? demoNames : NAMES;
+  const displayNum = demoMode ? {"Kyle Larson":"5","William Byron":"24","Denny Hamlin":"11","Ryan Blaney":"12","Brad Keselowski":"6","Chase Elliott":"9"} : NUM;
+  const displayPos = demoMode ? {"Kyle Larson":1,"William Byron":2,"Denny Hamlin":3,"Ryan Blaney":4,"Brad Keselowski":5,"Chase Elliott":6} : SIM_POS;
+  const displayTiming = demoMode ? {
+    "Kyle Larson":{laps_completed:500,delta_leader:0},
+    "William Byron":{laps_completed:500,delta_leader:1.25},
+    "Denny Hamlin":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown},
+    "Ryan Blaney":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown},
+    "Brad Keselowski":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown},
+    "Chase Elliott":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown}
+  } : TIMING;
+  const displayEor = demoMode ? {
+    "Kyle Larson":{t5:29.8},"William Byron":{t5:29.9},"Denny Hamlin":{t5:30.05},
+    "Ryan Blaney":{t5:30.1},"Brad Keselowski":{t5:demoPace},"Chase Elliott":{t5:30.0}
+  } : EOR;
+  const displayLastLap = demoMode ? {"Kyle Larson":29.7,"William Byron":29.9,"Denny Hamlin":30.0,"Ryan Blaney":30.1,"Brad Keselowski":demoPace,"Chase Elliott":30.0} : LAST_LAP_TIME;
+  const displaySession = demoMode ? {track_name:"Bristol Motor Speedway",session_type:"RACE",session_date:"SYNTHETIC DEMO",current_lap:500,laps_in_race:500,flag_state:1} : session;
+  const displayPrimary = demoMode ? "Brad Keselowski" : primary;
   const palette = {
     bg: dark ? "#080d17" : "#f3f6fb",
     panel: dark ? "#111b2b" : "#ffffff",
@@ -305,13 +328,16 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
     red: "#ff647c"
   };
   const mono = { fontFamily: "'SF Mono','Consolas',monospace", fontVariantNumeric: "tabular-nums" };
-  const ordered = [...NAMES].sort((a,b) => (SIM_POS[a] || 99) - (SIM_POS[b] || 99));
+  const ordered = [...displayNames].sort((a,b) => (displayPos[a] || 99) - (displayPos[b] || 99));
   const towerNames = ordered.slice(0, 12);
-  if (primary && !towerNames.includes(primary)) towerNames.push(primary);
-  const selected = TIMING[primary] || {};
-  const leaderName = ordered.find(n => SIM_POS[n] === 1);
-  const leaderTiming = leaderName ? TIMING[leaderName] : null;
+  if (displayPrimary && !towerNames.includes(displayPrimary)) towerNames.push(displayPrimary);
+  const selected = displayTiming[displayPrimary] || {};
+  const leaderName = ordered.find(n => displayPos[n] === 1);
+  const leaderTiming = leaderName ? displayTiming[leaderName] : null;
   const timeToLeader = formatOfficialLeaderGap(selected, leaderTiming);
+  const paceDeficit = timeToLeader?.type === "laps" && timeToLeader.value > 0
+    ? estimatePaceDeficitPerLap(displayEor[displayPrimary]?.t5, displayEor[leaderName]?.t5)
+    : null;
   const ahead = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) - 1);
   const behind = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) + 1);
   const gapTo = (name) => {
@@ -334,19 +360,24 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
     <section style={{margin:"14px 12px 18px",color:palette.text}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
         <div><div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:palette.accent}}>RACE CONTROL / LIVE TIMING</div><div style={{fontSize:22,fontWeight:900,letterSpacing:-.6,marginTop:3}}>Race Command</div></div>
-        <div style={{textAlign:"right"}}><div style={{fontSize:9,fontWeight:900,letterSpacing:1.2,color:palette.muted}}>FEED STATUS</div><div style={{fontSize:11,fontWeight:900,color:status==="live"?palette.green:palette.yellow,marginTop:4}}>{statusLabel}</div></div>
+        <div style={{textAlign:"right"}}><div style={{fontSize:9,fontWeight:900,letterSpacing:1.2,color:palette.muted}}>FEED STATUS</div><div style={{fontSize:11,fontWeight:900,color:demoMode?palette.yellow:status==="live"?palette.green:palette.yellow,marginTop:4}}>{demoMode?"DEMO MODE":statusLabel}</div></div>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+        <button onClick={()=>setDemoMode(v=>!v)} style={{padding:"7px 11px",borderRadius:6,border:"1px solid "+palette.accent,background:demoMode?palette.accent:"transparent",color:demoMode?"#07111f":palette.accent,fontSize:10,fontWeight:900}}>{demoMode?"EXIT DEMO":"TRY DEMO DATA"}</button>
+        {demoMode && ["3 laps down","2 laps down","1 lap down","on lead lap","gaining"].map(s=><button key={s} onClick={()=>setDemoScenario(s)} style={{padding:"6px 8px",borderRadius:5,border:"1px solid "+palette.line,background:demoScenario===s?palette.panel2:"transparent",color:palette.text,fontSize:9,fontWeight:800}}>{s.toUpperCase()}</button>)}
       </div>
       <div style={{...card,padding:14,marginBottom:10,background:dark?"linear-gradient(120deg,#132b43,#101a2a 68%,#17243a)": "linear-gradient(120deg,#e5f2ff,#fff 70%,#eaf0fa)"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
-          <div style={{minWidth:0}}><div style={{fontSize:9,letterSpacing:1.4,fontWeight:900,color:palette.muted}}>TRACK / SESSION</div><div style={{fontSize:16,fontWeight:900,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{session?.track_name || "Session not identified"}</div><div style={{fontSize:10,color:palette.muted,marginTop:3}}>{String(session?.session_type || "NO SESSION").replaceAll("_"," ").toUpperCase()} · {session?.session_date || "—"}</div></div>
-          <div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:9,letterSpacing:1.2,fontWeight:900,color:palette.muted}}>RACE STATUS</div><div style={{fontSize:15,fontWeight:900,color:flagColor,marginTop:4}}>{flagLabel}</div><div style={{fontSize:11,color:palette.muted,...mono,marginTop:3}}>LAP {session?.current_lap ?? selected.laps_completed ?? "—"}{session?.laps_in_race ? " / "+session.laps_in_race : ""}</div></div>
+          <div style={{minWidth:0}}><div style={{fontSize:9,letterSpacing:1.4,fontWeight:900,color:palette.muted}}>TRACK / SESSION</div><div style={{fontSize:16,fontWeight:900,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displaySession?.track_name || "Session not identified"}</div><div style={{fontSize:10,color:palette.muted,marginTop:3}}>{String(displaySession?.session_type || "NO SESSION").replaceAll("_"," ").toUpperCase()} · {displaySession?.session_date || "—"}</div></div>
+          <div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:9,letterSpacing:1.2,fontWeight:900,color:palette.muted}}>RACE STATUS</div><div style={{fontSize:15,fontWeight:900,color:flagColor,marginTop:4}}>{demoMode ? "GREEN" : flagLabel}</div><div style={{fontSize:11,color:palette.muted,...mono,marginTop:3}}>LAP {displaySession?.current_lap ?? selected.laps_completed ?? "—"}{displaySession?.laps_in_race ? " / "+displaySession.laps_in_race : ""}</div></div>
         </div>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
-        {metric("SELECTED DRIVER", "#"+(NUM[primary] || "?")+" · "+primary.split(" ").slice(-1)[0], "P"+(SIM_POS[primary] || "—")+" · "+(selected.laps_completed ?? "—")+" laps completed")}
-        {metric("TIME TO LEADER", timeToLeader?.label || "—", "Official elapsed-time gap plus lap deficit when lapped")}
-        {metric("LAST CLEAN LAP", fmt(LAST_LAP_TIME[primary]), "Lap-time history filter excludes detected cautions / pit laps")}
-        {metric("LAST 5 LAP AVG", fmt(EOR[primary]?.t5), "Current stint · latest five clean laps available")}
+        {metric("SELECTED DRIVER", "#"+(displayNum[displayPrimary] || "?")+" · "+displayPrimary.split(" ").slice(-1)[0], "P"+(displayPos[displayPrimary] || "—")+" · "+(selected.laps_completed ?? "—")+" laps completed")}
+        {metric("LAP DEFICIT", timeToLeader?.label || "—", "Official lap-count difference to leader")}
+        {metric("PACE DEFICIT / LAP", paceDeficit == null ? "—" : (paceDeficit > 0 ? "+" : "")+paceDeficit.toFixed(2)+"s", demoMode ? "Synthetic five-lap average vs leader" : "Estimated current-stint 5-lap average vs leader")}
+        {metric("LAST CLEAN LAP", fmt(displayLastLap[displayPrimary]), "Lap-time history filter excludes detected cautions / pit laps")}
+        {metric("LAST 5 LAP AVG", fmt(displayEor[displayPrimary]?.t5), "Current stint · latest five clean laps available")}
       </div>
       <div style={{...card,padding:12,marginBottom:10}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official interval or lap-count difference</div></div>
@@ -365,16 +396,16 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
           <span>POS</span><span>DRIVER</span><span style={{textAlign:"right"}}>TO LEADER</span><span style={{textAlign:"right"}}>LAST</span><span style={{textAlign:"right"}}>5-LAP</span>
         </div>
         {towerNames.map(name => {
-          const p=TIMING[name]||{}, active=name===primary;
+          const p=displayTiming[name]||{}, active=name===displayPrimary;
           return <button key={name} onClick={()=>onSelectDriver(name)} style={{display:"grid",width:"100%",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,alignItems:"center",padding:"10px",textAlign:"left",border:0,borderBottom:"1px solid "+palette.line,background:active?(dark?"#173452":"#e5f2ff"):"transparent",color:palette.text,cursor:"pointer"}}>
-            <span style={{fontSize:13,fontWeight:900,color:active?palette.accent:palette.muted,...mono}}>{SIM_POS[name]||"—"}</span>
-            <span style={{minWidth:0}}><span style={{display:"block",fontSize:11,fontWeight:850,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{NUM[name]||"?"} {name}</span><span style={{display:"block",fontSize:8,color:palette.muted,marginTop:2}}>{p.laps_completed??"—"} LAPS</span></span>
+            <span style={{fontSize:13,fontWeight:900,color:active?palette.accent:palette.muted,...mono}}>{displayPos[name]||"—"}</span>
+            <span style={{minWidth:0}}><span style={{display:"block",fontSize:11,fontWeight:850,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{displayNum[name]||"?"} {name}</span><span style={{display:"block",fontSize:8,color:palette.muted,marginTop:2}}>{p.laps_completed??"—"} LAPS</span></span>
             <span style={{textAlign:"right",fontSize:10,fontWeight:800,...mono}}>{formatOfficialLeaderGap(p,leaderTiming)?.label || "—"}</span>
-            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(LAST_LAP_TIME[name])}</span>
-            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(EOR[name]?.t5)}</span>
+            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(displayLastLap[name])}</span>
+            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(displayEor[name]?.t5)}</span>
           </button>;
         })}
-        <div style={{padding:"9px 11px",fontSize:9,lineHeight:1.5,color:palette.muted,borderTop:"1px solid "+palette.line}}>* Time to leader uses official NASCAR delta on the same lap and shows lap count when a car is lapped. Last lap and current-stint 5-lap average are calculated from public lap history.</div>
+        <div style={{padding:"9px 11px",fontSize:9,lineHeight:1.5,color:palette.muted,borderTop:"1px solid "+palette.line}}>* Lapped cars show lap deficit plus estimated pace deficit per lap. Positive pace deficit means slower than the leader. Demo values are synthetic.</div>
       </div>
     </section>
   );
