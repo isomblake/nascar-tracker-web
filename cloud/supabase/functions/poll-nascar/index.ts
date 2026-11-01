@@ -170,7 +170,13 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
   if (currentLap != null) sessionUpdate.current_lap = currentLap;
   if (liveData?.laps_in_race != null) sessionUpdate.laps_in_race = liveData.laps_in_race;
   if (liveData?.laps_to_go != null) sessionUpdate.laps_to_go = liveData.laps_to_go;
-  if (liveData?.stage != null) sessionUpdate.stage = liveData.stage;
+  if (liveData?.stage != null) {
+    const stageValue = liveData.stage;
+    const stageNumber = typeof stageValue === "number"
+      ? stageValue
+      : Number(stageValue?.stage_num ?? stageValue?.stage ?? NaN);
+    if (Number.isInteger(stageNumber)) sessionUpdate.stage = stageNumber;
+  }
 
   const shouldStop =
     liveData?.flag_state === FLAG_CHECKERED ||
