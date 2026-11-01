@@ -326,12 +326,14 @@ export default function App() {
     const seriesFilter = session?.series ?? 1;
     (async () => {
       try {
-        const { data, error } = await supabase
+        let practiceQuery = supabase
           .from('sessions')
           .select('id')
           .neq('started_by', 'historical')
           .in('session_type', ['practice1', 'practice2'])
-          .eq('series', seriesFilter)
+          .eq('series', seriesFilter);
+        if (session?.track_name) practiceQuery = practiceQuery.eq('track_name', session.track_name);
+        const { data, error } = await practiceQuery
           .order('started_at', { ascending: false })
           .limit(1);
         if (error) { console.error('practice auto-load:', error); return; }
