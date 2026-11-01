@@ -72,7 +72,7 @@ export function summarizeRun(run) {
     best: Math.min(...times),
     firstFiveAverage: mean(firstFive),
     lastFiveAverage: mean(lastFive),
-    firstToLastFiveDelta: firstFive.length === 5 && lastFive.length === 5
+    firstToLastFiveDelta: times.length >= 10 && firstFive.length === 5 && lastFive.length === 5
       ? mean(lastFive) - mean(firstFive)
       : null,
     standardDeviation: Math.sqrt(variance),
@@ -137,11 +137,11 @@ export function buildDriverRunAnalysis(laps, options = {}) {
   const best = validTimes.length ? Math.min(...validTimes) : null;
   const hasOfficialPitEvents = explicitPitLaps.size > 0;
   const inferredPitLaps = new Set();
-  if (!hasOfficialPitEvents && best != null) {
+  if (best != null) {
     for (const row of laps || []) {
       const lap = Number(row?.[0]);
       const time = Number(row?.[1]);
-      if (Number.isInteger(lap) && time > best + 20 && !cautionLaps.has(lap)) inferredPitLaps.add(lap);
+      if (Number.isInteger(lap) && time > best + 20 && !cautionLaps.has(lap) && !explicitPitLaps.has(lap)) inferredPitLaps.add(lap);
     }
   }
   const pitLaps = new Set([...explicitPitLaps, ...inferredPitLaps]);
@@ -150,11 +150,36 @@ export function buildDriverRunAnalysis(laps, options = {}) {
     runs: runs.map((run) => ({
       ...run,
       summary: summarizeRun(run),
-      tireAgeBasis: hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
-      tireAgeConfidence: hasOfficialPitEvents ? "higher" : "estimated",
+      tireAgeBasis: hasOfficialPitEvents && inferredPitLaps.size ? "mixed-pit-events-and-inference" : hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
+      tireAgeConfidence: hasOfficialPitEvents && inferredPitLaps.size === 0 ? "higher" : "estimated",
     })),
     pitLaps: [...pitLaps].sort((a, b) => a - b),
     hasOfficialPitEvents,
-    tireAgeBasis: hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
+    tireAgeBasis: hasOfficialPitEvents && inferredPitLaps.size ? "mixed-pit-events-and-inference" : hasOfficialPitEvents ? "official-pit-event" : "inferred-run-boundary",
   };
+}
+
+export function compareOfficialTiming(primary, competitor) {
+  if (!primary || !competitor) return null;
+  const primaryLaps = Number(primary.laps_completed);
+  const competitorLaps = Number(competitor.laps_completed);
+  if (Number.isFinite(primaryLaps) && Number.isFinite(competitorLaps) && primaryLaps > 0 && competitorLaps > 0 && primaryLaps !== competitorLaps) {
+    return {
+      lapDelta: primaryLaps - competitorLaps,
+      gapSeconds: null,
+      source: "official-lap-count",
+    };
+  }
+  const primaryDelta = Number(primary.delta_leader);
+  const competitorDelta = Number(competitor.delta_leader);
+  if (Number.isFinite(primaryDelta) && Number.isFinite(competitorDelta) &&
+      primary.delta_leader != null && competitor.delta_leader != null &&
+      (primaryLaps === competitorLaps || !Number.isFinite(primaryLaps) || !Number.isFinite(competitorLaps))) {
+    return {
+      lapDelta: 0,
+      gapSeconds: primaryDelta - competitorDelta,
+      source: "difference-of-official-leader-deltas",
+    };
+  }
+  return null;
 }
