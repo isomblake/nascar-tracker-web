@@ -5,6 +5,7 @@ import {
   compareLapByLap,
   compareOfficialTiming,
   formatOfficialLeaderGap,
+  estimatePaceDeficitPerLap,
   isTireChangePitStop,
   getPitStopTireCount,
 } from "./engineeringMetrics";
@@ -64,11 +65,17 @@ describe("engineeringMetrics", () => {
     expect(formatOfficialLeaderGap(
       { laps_completed: 440, delta_leader: -3, vehicle_elapsed_time: 10238.595 },
       { laps_completed: 443, delta_leader: 0, vehicle_elapsed_time: 10173.195 }
-    )).toEqual({ label: "3 laps down · 65.4s", type: "laps", value: 3, timeGapSeconds: 65.4 });
+    )).toEqual({ label: "3 laps down", type: "laps", value: 3, timeGapSeconds: null });
     expect(formatOfficialLeaderGap(
       { laps_completed: 443, delta_leader: 0 },
       { laps_completed: 443, delta_leader: 0 }
     )).toEqual({ label: "LEADER", type: "leader", value: 0, timeGapSeconds: 0 });
+  });
+
+  test("calculates estimated pace deficit per lap", () => {
+    expect(estimatePaceDeficitPerLap(30.2, 29.8)).toBeCloseTo(0.4, 5);
+    expect(estimatePaceDeficitPerLap(29.4, 29.8)).toBeCloseTo(-0.4, 5);
+    expect(estimatePaceDeficitPerLap(null, 29.8)).toBeNull();
   });
 
   test("does not interpret negative NASCAR lap-down sentinel values as seconds", () => {
