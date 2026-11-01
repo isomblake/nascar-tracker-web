@@ -169,6 +169,26 @@ export function buildDriverRunAnalysis(laps, options = {}) {
   };
 }
 
+export function formatOfficialLeaderGap(driver, leader) {
+  if (!driver || !leader) return null;
+  const driverLaps = Number(driver.laps_completed);
+  const leaderLaps = Number(leader.laps_completed);
+  if (Number.isFinite(driverLaps) && Number.isFinite(leaderLaps)) {
+    const lapDifference = leaderLaps - driverLaps;
+    if (lapDifference > 0) {
+      return { label: `${lapDifference} lap${lapDifference === 1 ? "" : "s"} down`, type: "laps", value: lapDifference };
+    }
+    if (lapDifference < 0) {
+      return { label: `${Math.abs(lapDifference)} lap${Math.abs(lapDifference) === 1 ? "" : "s"} ahead`, type: "laps", value: lapDifference };
+    }
+  }
+  const delta = Number(driver.delta_leader);
+  if (driver.delta_leader == null || !Number.isFinite(delta) || delta < 0) return null;
+  return delta === 0
+    ? { label: "LEADER", type: "leader", value: 0 }
+    : { label: `${delta.toFixed(2)}s`, type: "seconds", value: delta };
+}
+
 export function compareOfficialTiming(primary, competitor) {
   if (!primary || !competitor) return null;
   const primaryLaps = Number(primary.laps_completed);
@@ -184,6 +204,7 @@ export function compareOfficialTiming(primary, competitor) {
   const competitorDelta = Number(competitor.delta_leader);
   if (Number.isFinite(primaryDelta) && Number.isFinite(competitorDelta) &&
       primary.delta_leader != null && competitor.delta_leader != null &&
+      primaryDelta >= 0 && competitorDelta >= 0 &&
       (primaryLaps === competitorLaps || !Number.isFinite(primaryLaps) || !Number.isFinite(competitorLaps))) {
     return {
       lapDelta: 0,
