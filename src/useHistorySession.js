@@ -8,6 +8,7 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
+import { normalizePracticeGroup } from './raceMetrics';
 
 const PIT_MARGIN_SECONDS = 5;
 const ABSOLUTE_MAX_LAP = 300;
@@ -183,7 +184,7 @@ export function useHistorySession(sessionId) {
       const dkey = d.driver_key;
       const name = d.full_name;
       NUM[name] = d.car_number || '?';
-      GROUPS[name] = d.practice_group || null;
+      GROUPS[name] = normalizePracticeGroup(d.practice_group);
 
       const stats = computeDriverStats(byDriver[dkey] || [], cautionSet);
       BEST[name] = stats.best;
