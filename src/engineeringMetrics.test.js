@@ -37,6 +37,8 @@ describe("engineeringMetrics", () => {
     expect(isTireChangePitStop({ details: { left_front_tire_changed: true, right_front_tire_changed: false } })).toBe(true);
     expect(isTireChangePitStop({ details: { left_front_tire_changed: false, left_rear_tire_changed: false, right_front_tire_changed: false, right_rear_tire_changed: false } })).toBe(false);
     expect(isTireChangePitStop({ details: { pit_stop_type: "FOUR_TIRE_CHANGE" } })).toBe(true);
+    expect(isTireChangePitStop({ details: { pit_stop_type: "FOUR_WHEEL_CHANGE" } })).toBe(true);
+    expect(isTireChangePitStop({ details: { pit_stop_type: "TWO_WHEEL_CHANGE_LEFT" } })).toBe(true);
     expect(isTireChangePitStop({ details: { total_duration: 13.2 } })).toBe(false);
   });
 
