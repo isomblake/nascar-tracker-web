@@ -81,15 +81,28 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
   if (!lapData && !liveData) throw new Error("Both NASCAR live-feed and lap-times endpoints failed");
 
   const drivers = getDrivers(lapData, liveData);
+  const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
+  const vehicleByDriver = new Map<string, any>();
+  for (const vehicle of vehicles) {
+    const key = String(vehicle.NASCARDriverID ?? vehicle.driver?.NASCARDriverID ?? vehicle.vehicle_number ?? "");
+    if (key) vehicleByDriver.set(key, vehicle);
+  }
   const driverRows: any[] = [];
   const lapRows: any[] = [];
   const positionRows = new Map<string, any>();
+  const pitEventRows: any[] = [];
 
   for (const driver of drivers) {
     const driverKey = String(driver.NASCARDriverID ?? driver.Number ?? "");
     if (!driverKey) continue;
     const fullName = driver.FullName ?? "";
     const laps = driver.Laps ?? driver.laps ?? [];
+    const vehicle = vehicleByDriver.get(driverKey) ?? driver;
+    const pitStops: any[] = vehicle.pit_stops ?? vehicle.PitStops ?? [];
+    const sortedPitStops = [...pitStops].sort((a, b) =>
+      Number(a.pit_in_lap_count ?? a.pit_in_leader_lap ?? 0) - Number(b.pit_in_lap_count ?? b.pit_in_leader_lap ?? 0)
+    );
+    const lastPit = sortedPitStops.length ? sortedPitStops[sortedPitStops.length - 1] : null;
 
     driverRows.push({
       session_id: session.id,
@@ -104,22 +117,61 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
       const lapNumber = lap.Lap ?? lap.lap ?? lap.lap_number;
       const lapTime = lap.LapTime ?? lap.lapTime ?? lap.lap_time;
       if (lapNumber == null || lapTime == null || Number(lapTime) <= 0) continue;
+      const pitLapNumbers = new Set(sortedPitStops.map((stop) =>
+        Number(stop.pit_in_lap_count ?? stop.pit_in_leader_lap ?? 0)
+      ).filter((lap) => Number.isInteger(lap) && lap > 0));
       lapRows.push({
         session_id: session.id,
         driver_key: driverKey,
         lap_number: Number(lapNumber),
         lap_time: Number(lapTime),
+        ...(pitLapNumbers.has(Number(lapNumber)) ? { is_pit: true } : {}),
       });
     }
 
-    const topPosition = driver.running_position ?? driver.RunningPos ?? driver.running_pos;
+    const topPosition = vehicle.running_position ?? vehicle.RunningPos ?? vehicle.running_pos ??
+      driver.running_position ?? driver.RunningPos ?? driver.running_pos;
     const lastLap = laps[laps.length - 1];
     const position = topPosition ?? lastLap?.RunningPos ?? lastLap?.running_pos ?? lastLap?.runningPos;
     if (position != null) {
+      const changedTires = lastPit
+        ? ["left_front_tire_changed", "left_rear_tire_changed", "right_front_tire_changed", "right_rear_tire_changed"]
+            .filter((key) => lastPit[key] === true).length
+        : null;
       positionRows.set(driverKey, {
         session_id: session.id,
         driver_key: driverKey,
         position: Number(position),
+        laps_completed: Number(vehicle.laps_completed ?? vehicle.LapsCompleted ?? 0) || null,
+        delta_leader: Number.isFinite(Number(vehicle.delta)) ? Number(vehicle.delta) : null,
+        vehicle_elapsed_time: Number.isFinite(Number(vehicle.vehicle_elapsed_time)) ? Number(vehicle.vehicle_elapsed_time) : null,
+        last_lap_time: Number.isFinite(Number(vehicle.last_lap_time)) ? Number(vehicle.last_lap_time) : null,
+        last_lap_speed: Number.isFinite(Number(vehicle.last_lap_speed)) ? Number(vehicle.last_lap_speed) : null,
+        average_running_position: Number.isFinite(Number(vehicle.average_running_position)) ? Number(vehicle.average_running_position) : null,
+        average_speed: Number.isFinite(Number(vehicle.average_speed)) ? Number(vehicle.average_speed) : null,
+        pit_stops_count: pitStops.length,
+        last_pit_lap: lastPit ? Number(lastPit.pit_in_lap_count ?? lastPit.pit_in_leader_lap ?? 0) || null : null,
+        last_pit_total_duration: lastPit && Number.isFinite(Number(lastPit.total_duration)) ? Number(lastPit.total_duration) : null,
+        last_pit_box_duration: lastPit && Number.isFinite(Number(lastPit.pit_stop_duration ?? lastPit.box_stop_duration)) ? Number(lastPit.pit_stop_duration ?? lastPit.box_stop_duration) : null,
+        last_pit_tire_count: changedTires,
+        last_pit_positions_gained: lastPit && Number.isFinite(Number(lastPit.positions_gained ?? lastPit.positions_gained_lossed)) ? Number(lastPit.positions_gained ?? lastPit.positions_gained_lossed) : null,
+        last_pit_stop_type: lastPit?.pit_stop_type ?? lastPit?.stop_type ?? null,
+        pit_details: lastPit ?? null,
+      });
+    }
+    for (const stop of sortedPitStops) {
+      const pitLap = Number(stop.pit_in_lap_count ?? stop.pit_in_leader_lap ?? 0);
+      if (!Number.isInteger(pitLap) || pitLap <= 0) continue;
+      pitEventRows.push({
+        session_id: session.id,
+        event_type: "pit_stop",
+        lap_number: pitLap,
+        driver_key: driverKey,
+        details: {
+          ...stop,
+          car_number: String(driver.Number ?? vehicle.vehicle_number ?? ""),
+          driver_name: fullName,
+        },
       });
     }
   }
@@ -145,13 +197,27 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
     if (error) throw new Error("Position upsert failed: " + error.message);
   }
 
+  if (pitEventRows.length) {
+    const { data: existingPitEvents, error: pitReadError } = await supabase
+      .from("race_events")
+      .select("driver_key,lap_number")
+      .eq("session_id", session.id)
+      .eq("event_type", "pit_stop");
+    if (pitReadError) throw new Error("Pit-event lookup failed: " + pitReadError.message);
+    const existingKeys = new Set((existingPitEvents ?? []).map((event) => `${event.driver_key}:${event.lap_number}`));
+    const newPitEvents = pitEventRows.filter((event) => !existingKeys.has(`${event.driver_key}:${event.lap_number}`));
+    for (let i = 0; i < newPitEvents.length; i += 100) {
+      const { error } = await supabase.from("race_events").insert(newPitEvents.slice(i, i + 100));
+      if (error) throw new Error("Pit-event insert failed: " + error.message);
+    }
+  }
+
   const { count, error: countError } = await supabase
     .from("laps")
     .select("lap_number", { count: "exact", head: true })
     .eq("session_id", session.id);
   if (countError) throw new Error("Lap count failed: " + countError.message);
 
-  const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
   const vehicleMaxLap = vehicles.reduce(
     (max, vehicle) => Math.max(max, Number(vehicle.laps_completed ?? 0)),
     0,
