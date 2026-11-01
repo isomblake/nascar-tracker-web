@@ -1155,6 +1155,14 @@ export default function App() {
             const selectedTiming = TIMING[primaryResolved] || {};
             const selectedPitStops = PIT_STOPS[primaryResolved] || [];
             const latestPit = selectedPitStops[selectedPitStops.length - 1] || null;
+            const driverRuns = RUN_ANALYSIS[primaryResolved]?.runs || [];
+            const latestRun = driverRuns[driverRuns.length - 1] || null;
+            const latestRunSummary = latestRun?.summary || null;
+            const runBasisLabel = latestRun?.tireAgeBasis === "official-pit-event"
+              ? "Run boundary supported by official pit event"
+              : latestRun?.tireAgeBasis === "mixed-pit-events-and-inference"
+                ? "Mixed official pit events and inferred boundaries"
+                : "Run boundaries inferred from lap data";
             const leaderTiming = TIMING[NAMES.find((n) => SIM_POS[n] === 1)] || null;
             const officialLeaderGap = formatOfficialLeaderGap(selectedTiming, leaderTiming)?.label || null;
             const battleDriver = compDrivers.find((name) => name !== primaryResolved) || "";
@@ -1186,6 +1194,25 @@ export default function App() {
                   {metricCard("LAST 5 VS PRIOR 5", deltaText(trend), trend == null ? "Requires 10 consecutive clean laps" : trend < 0 ? "Pace improving" : trend > 0 ? "Pace slowing" : "No change")}
                   {metricCard("TIME TO LEADER", officialLeaderGap || "—", "Elapsed-time gap plus lap deficit when lapped")}
                   {metricCard("LAST PIT STOP", latestPit ? "Lap " + latestPit.lap_number : "—", pitRoadDuration(latestPit?.details) != null ? pitRoadDuration(latestPit.details).toFixed(1) + "s pit road" : "Pit duration unavailable")}
+                </div>
+                <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800 }}>LATEST RUN ANALYSIS</div>
+                    <div style={{ fontSize: 9, color: sub }}>{latestRun ? `L${latestRun.startLap}–L${latestRun.endLap}` : "No run data"}</div>
+                  </div>
+                  {latestRunSummary ? (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
+                        {metricCard("RUN LAPS", String(latestRunSummary.lapCount), "Valid timed laps in latest segment")}
+                        {metricCard("RUN AVG", ft(latestRunSummary.average), "Mean lap time")}
+                        {metricCard("RUN BEST", ft(latestRunSummary.best), "Fastest valid lap")}
+                        {metricCard("LAP-TIME VARIABILITY", latestRunSummary.standardDeviation == null ? "—" : latestRunSummary.standardDeviation.toFixed(3) + "s", "Standard deviation; lower is more consistent")}
+                        {metricCard("FIRST 5 → LAST 5", latestRunSummary.firstToLastFiveDelta == null ? "—" : (latestRunSummary.firstToLastFiveDelta > 0 ? "+" : "") + latestRunSummary.firstToLastFiveDelta.toFixed(3) + "s", "Positive = slower over the run")}
+                        {metricCard("PACE TREND", latestRunSummary.trendSecondsPerLap == null ? "—" : (latestRunSummary.trendSecondsPerLap > 0 ? "+" : "") + latestRunSummary.trendSecondsPerLap.toFixed(3) + "s/lap", "Linear trend; positive = slowing")}
+                      </div>
+                      <div style={{ fontSize: 9, color: sub, lineHeight: 1.5, marginTop: 8 }}>{runBasisLabel}. This is a lap-time segment, not verified tire age; track evolution, traffic, weather, and setup changes can also affect the trend.</div>
+                    </>
+                  ) : <div style={{ fontSize: 10, color: sub }}>Not enough valid lap history to summarize a run.</div>}
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
                   <div style={{ fontSize: 10, fontWeight: 800, marginBottom: 8 }}>POSITION BATTLE</div>
