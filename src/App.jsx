@@ -5,7 +5,7 @@ import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
-import { compareRunsByTireAge, summarizeRun } from "./engineeringMetrics";
+import { compareRunsByTireAge, summarizeRun, compareOfficialTiming } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -920,6 +920,10 @@ export default function App() {
             const priorAvg = avg(prior5);
             const trend = recentAvg != null && priorAvg != null ? recentAvg - priorAvg : null;
             const medianDelta = me.t10 != null && paceMedian != null ? me.t10 - paceMedian : null;
+            const selectedTiming = TIMING[primaryResolved] || {};
+            const selectedPitStops = PIT_STOPS[primaryResolved] || [];
+            const latestPit = selectedPitStops[selectedPitStops.length - 1] || null;
+            const officialLeaderGap = selectedTiming.delta_leader != null ? Number(selectedTiming.delta_leader) : null;
             const metricCard = (label, value, detail) => (
               <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, minWidth: 0 }}>
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, letterSpacing: 0.7 }}>{label}</div>
@@ -945,24 +949,36 @@ export default function App() {
                   {metricCard("10-LAP PACE RANK", paceRank ? "#" + paceRank + " / " + ranked.length : "—", "Among drivers with a valid 10-lap run")}
                   {metricCard("10-LAP VS FIELD MEDIAN", deltaText(medianDelta), "Negative = faster than field median")}
                   {metricCard("LAST 5 VS PRIOR 5", deltaText(trend), trend == null ? "Requires 10 consecutive clean laps" : trend < 0 ? "Pace improving" : trend > 0 ? "Pace slowing" : "No change")}
+                  {metricCard("GAP TO LEADER", officialLeaderGap == null ? "—" : officialLeaderGap.toFixed(2) + "s", "NASCAR live-feed delta")}
+                  {metricCard("LAST PIT STOP", latestPit ? "Lap " + latestPit.lap_number : "—", latestPit?.details?.total_duration != null ? Number(latestPit.details.total_duration).toFixed(1) + "s pit road" : "Pit event not supplied")}
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
                   <div style={{ fontSize: 10, fontWeight: 800, marginBottom: 8 }}>POSITION BATTLE</div>
                   {[{label:"CAR AHEAD",name:aheadName},{label:"CAR BEHIND",name:behindName}].map((item) => {
                     const timing = item.name ? compareRaceLaps(LAPS[primaryResolved] || [], LAPS[item.name] || []) : null;
+                    const official = item.name ? compareOfficialTiming(TIMING[primaryResolved], TIMING[item.name]) : null;
                     const pace = timing?.paceDelta5;
+                    const gapLabel = official?.gapSeconds != null
+                      ? Math.abs(official.gapSeconds).toFixed(2) + "s feed Δ"
+                      : official?.lapDelta
+                        ? Math.abs(official.lapDelta) + " lap" + (Math.abs(official.lapDelta) === 1 ? "" : "s")
+                        : timing?.lapDelta
+                          ? Math.abs(timing.lapDelta) + " lap" + (Math.abs(timing.lapDelta) === 1 ? "" : "s")
+                          : timing?.gapSeconds != null
+                            ? Math.abs(timing.gapSeconds).toFixed(2) + "s calc."
+                            : "Gap n/a";
                     return <div key={item.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 0", borderTop:`1px solid ${bdr}`, gap:8 }}>
                       <div style={{minWidth:0}}>
                         <div style={{fontSize:9,color:sub,fontWeight:700}}>{item.label}</div>
                         <div style={{fontSize:12,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name ? "#" + (NUM[item.name] || "?") + " " + item.name : "No car in this position"}</div>
                       </div>
                       <div style={{textAlign:"right",flexShrink:0}}>
-                        <div style={{fontSize:12,fontWeight:800,...MF}}>{timing?.lapDelta ? Math.abs(timing.lapDelta) + " lap" + (Math.abs(timing.lapDelta)===1?"":"s") : timing?.gapSeconds != null ? Math.abs(timing.gapSeconds).toFixed(2)+"s calc." : "Gap n/a"}</div>
+                        <div style={{fontSize:12,fontWeight:800,...MF}}>{gapLabel}</div>
                         <div style={{fontSize:10,color:deltaColor(pace),...MF}}>{pace == null ? "5L pace unavailable" : (pace > 0 ? "+" : "") + pace.toFixed(3) + "s/lap vs them"}</div>
                       </div>
                     </div>;
                   })}
-                  <div style={{fontSize:9,color:sub,marginTop:7}}>Calculated from public lap history; not official NASCAR interval timing.</div>
+                  <div style={{fontSize:9,color:sub,marginTop:7}}>Uses NASCAR live-feed leader deltas when both cars are on the same lap. Falls back to calculated lap-history estimates when official interval data is unavailable.</div>
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
                   <div style={{fontSize:10,fontWeight:800,marginBottom:8}}>SELECTED HEAD-TO-HEAD</div>
