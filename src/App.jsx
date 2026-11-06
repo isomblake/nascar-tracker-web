@@ -1304,6 +1304,36 @@ export default function App() {
         const pC = usingPH ? practHist.CLR : CLR;
         const pRUN = usingPH ? practHist.RUN_ANALYSIS : RUN_ANALYSIS;
         const pPri = pNA.includes(primaryResolved) ? primaryResolved : (pNA[0] || primaryResolved);
+
+        // Practice rankings must cover the whole session, not only the latest stint.
+        // End-of-run pace is taken from each driver's longest clean run.
+        const practiceWindows = [5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100];
+        const practiceBest = {};
+        const practiceEnd = {};
+        for (const name of pNA) {
+          const runs = pRUN?.[name]?.runs || [];
+          const best = { ...(pB[name] || {}) };
+          const end = { ...(pE[name] || {}) };
+          const longestRun = [...runs].sort((a, b) => b.laps.length - a.laps.length)[0] || null;
+          for (const windowSize of practiceWindows) {
+            let bestAverage = Infinity;
+            for (const run of runs) {
+              const times = run.laps.map((lap) => Number(lap.time)).filter((time) => Number.isFinite(time) && time > 0);
+              for (let i = 0; i <= times.length - windowSize; i++) {
+                const average = times.slice(i, i + windowSize).reduce((sum, time) => sum + time, 0) / windowSize;
+                if (average < bestAverage) bestAverage = average;
+              }
+            }
+            best[`t${windowSize}`] = bestAverage === Infinity ? null : bestAverage;
+            const longestTimes = longestRun ? longestRun.laps.map((lap) => Number(lap.time)) : [];
+            const finalWindow = longestTimes.slice(-windowSize);
+            end[`t${windowSize}`] = finalWindow.length === windowSize
+              ? finalWindow.reduce((sum, time) => sum + time, 0) / windowSize
+              : null;
+          }
+          practiceBest[name] = best;
+          practiceEnd[name] = end;
+        }
         const primaryRuns = pRUN?.[pPri]?.runs || [];
         const compareCandidates = pNA.filter((name) => name !== pPri && (pRUN?.[name]?.runs || []).length > 0);
         const compareName = compareCandidates.includes(practiceCompareDriver)
@@ -1487,30 +1517,30 @@ export default function App() {
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>BEST WINDOW</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 10 }}>
                   {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => (
-                    <StatCell key={k} label={k.replace("t", "") + "L"} value={pB[pPri]?.[k]} rk={rank(pB, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
+                    <StatCell key={k} label={k.replace("t", "") + "L"} value={practiceBest[pPri]?.[k]} rk={rank(practiceBest, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
                   ))}
                 </div>
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>END OF RUN (worn tires)</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
                   {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => (
-                    <StatCell key={k + "e"} label={k.replace("t", "") + "L"} value={pE[pPri]?.[k]} rk={rank(pE, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
+                    <StatCell key={k + "e"} label={k.replace("t", "") + "L"} value={practiceEnd[pPri]?.[k]} rk={rank(practiceEnd, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
                   ))}
                 </div>
               </div>
 
               <div style={{ marginTop: 16 }}>
-                <RankTable title="BEST WINDOW RANKINGS" dataset={pB} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} defaultSort="best" />
+                <RankTable title="BEST WINDOW RANKINGS" dataset={practiceBest} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} defaultSort="best" />
               </div>
 
-              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={pE} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} showRunLength defaultSort="best" />
+              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={practiceEnd} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} showRunLength defaultSort="best" />
 
-              <FalloffCard primary={pPri} compDrivers={compDrivers} dark={dark} BEST={pB} EOR={pE} NUM={pN} />
+              <FalloffCard primary={pPri} compDrivers={compDrivers} dark={dark} BEST={practiceBest} EOR={practiceEnd} NUM={pN} />
 
               {compDrivers.filter((n) => n !== pPri).length > 0 && (
                 <div>
                   <div style={{ fontSize: 10, color: sub, fontWeight: 700, letterSpacing: 1, marginBottom: 6 }}>HEAD TO HEAD</div>
                   {compDrivers.filter((n) => n !== pPri).map((n) => (
-                    <PracticeCompCard key={n} name={n} primary={pPri} dark={dark} BEST={pB} EOR={pE} NUM={pN} GROUPS={pG} extraWindow={extraWindow} />
+                    <PracticeCompCard key={n} name={n} primary={pPri} dark={dark} BEST={practiceBest} EOR={practiceEnd} NUM={pN} GROUPS={pG} extraWindow={extraWindow} />
                   ))}
                 </div>
               )}
