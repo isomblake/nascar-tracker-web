@@ -74,7 +74,8 @@ function currentStint(rawLapsAsc, thr, cautionSet = new Set(), explicitPitSet = 
     const isPit = explicitPitSet.has(lapNum) || lapTime > thr;
     const isCaution = cautionSet.has(lapNum);
     const hasLapGap = i > 0 && lapNum !== rawLapsAsc[i - 1][0] + 1;
-    if (isPit || isCaution || hasLapGap) lastBoundaryIdx = i;
+    if (isPit || isCaution) lastBoundaryIdx = i;
+    else if (hasLapGap) lastBoundaryIdx = i - 1; // Keep the first lap after a data gap in the new stint.
   }
   const afterBoundary = rawLapsAsc.slice(lastBoundaryIdx + 1);
   // Filter out any remaining pit/caution laps (shouldn't happen, but defensive)
