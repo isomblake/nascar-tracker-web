@@ -1390,7 +1390,7 @@ export default function App() {
           <div style={{ padding: "6px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${bdr}`, background: usingPH ? (dark ? "#0d0d2a" : "#eef2ff") : bg }}>
             <div style={{ fontSize: 10, color: usingPH ? acc : sub }}>
               {usingPH
-                ? `${pSess?.track_name || ""} · ${pSess?.session_type?.toUpperCase() || ""} · ${pSess?.session_date || ""}`
+                ? `${pSess?.is_active ? "LIVE" : "FINAL"} · ${pSess?.track_name || ""} · ${pSess?.session_type?.toUpperCase() || ""} · ${pSess?.session_date || ""}`
                 : session?.track_name ? `${session?.is_active ? "LIVE" : "FINAL"} · ${session.track_name}` : "No practice session"}
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
