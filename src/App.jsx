@@ -253,11 +253,10 @@ class PracticeMatrixErrorBoundary extends React.Component {
  }
 }
 
-function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accent}) {
- const [mode,setMode]=useState("top10"), [view,setView]=useState("delta"), [windowSize,setWindowSize]=useState("50");
- const [includeSlow,setIncludeSlow]=useState(false);
+function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accent,favorites=[],onToggleFavorite}) {
+ const [mode,setMode]=useState("top10"), [view,setView]=useState("time"), [windowSize,setWindowSize]=useState("50");
+ const [includeSlow,setIncludeSlow]=useState(false), [sortLap,setSortLap]=useState(null), [sortDir,setSortDir]=useState(1);
  const border=dark?"#263247":"#dce2ea", panel=dark?"#111b2b":"#fff", muted=dark?"#8b9bb0":"#66758a", fg=dark?"#e8eef7":"#172235";
- // Defend against a session changing while the matrix is mounted.
  const driverNames=Array.isArray(names)?names:[];
  const lapData=lapsByDriver&&typeof lapsByDriver==="object"?lapsByDriver:{};
  const numberData=numbers&&typeof numbers==="object"?numbers:{};
@@ -268,25 +267,38 @@ function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accen
  const best=Object.fromEntries(driverNames.map(n=>{const times=validLaps(n).map(x=>Number(x[1])).filter(t=>t>0&&Number.isFinite(t));return [n,times.length?Math.min(...times):null];}));
  const time=(n,l)=>{const t=maps[n]?.get(l);return t>0&&Number.isFinite(t)&&(includeSlow||best[n]==null||t<=best[n]+5)?t:null;};
  const base=l=>{if(mode==="driver")return time(selectedDriver,l);const v=driverNames.map(n=>time(n,l)).filter(x=>x!=null).sort((a,b)=>a-b);if(!v.length)return null;if(mode==="fastest")return v[0];const top=v.slice(0,Math.min(mode==="top20"?20:10,v.length)),m=Math.floor(top.length/2);return top.length%2?top[m]:(top[m-1]+top[m])/2;};
+ const fastestByLap=Object.fromEntries(shown.map(l=>{const entries=driverNames.map(n=>({name:n,time:time(n,l)})).filter(x=>x.time!=null).sort((a,b)=>a.time-b.time);return [l,entries[0]||null];}));
+ const overall=driverNames.flatMap(n=>shown.map(l=>({name:n,lap:l,time:time(n,l)}))).filter(x=>x.time!=null).sort((a,b)=>a.time-b.time)[0];
  const label=mode==="fastest"?"Fastest driver":mode==="top10"?"Top-10 median":mode==="top20"?"Top-20 median":"Selected driver";
+ const ordered=[...driverNames].sort((a,b)=>{
+  const af=favorites.includes(a),bf=favorites.includes(b);
+  if(af!==bf)return af?-1:1;
+  if(sortLap!=null){const at=time(a,sortLap),bt=time(b,sortLap);if(at==null&&bt!=null)return 1;if(bt==null&&at!=null)return -1;if(at!=null&&bt!=null&&at!==bt)return (at-bt)*sortDir;}
+  return (parseInt(numberData[a],10)||999)-(parseInt(numberData[b],10)||999);
+ });
+ const toggleSort=l=>{if(sortLap===l)setSortDir(d=>-d);else{setSortLap(l);setSortDir(1);}};
  return <div style={{padding:12,minHeight:180}}>
   <div style={{fontSize:14,fontWeight:800,marginBottom:4}}>Lap-by-lap comparison</div>
-  <div style={{fontSize:10,color:muted,marginBottom:10}}>Each column is one session lap. Compare drivers on the same lap or against a field benchmark.</div>
-  {driverNames.length===0||laps.length===0 ? <div style={{padding:18,textAlign:"center",border:"1px solid "+border,borderRadius:8,color:muted,fontSize:12}}>{driverNames.length===0?"Driver data is still loading for this session.":"No lap times are available for this session yet."}<div style={{fontSize:10,marginTop:5}}>Return to Dashboard or try again after timing data has loaded.</div></div> : <>
+  <div style={{fontSize:10,color:muted,marginBottom:10}}>Star drivers to pin them to the top. Tap a lap header to rank the field by that lap.</div>
+  {driverNames.length===0||laps.length===0 ? <div style={{padding:18,textAlign:"center",border:"1px solid "+border,borderRadius:8,color:muted,fontSize:12}}>{driverNames.length===0?"Driver data is still loading for this session.":"No lap times are available for this session yet."}</div> : <>
   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
    <label style={{fontSize:10,color:muted}}>Benchmark<select value={mode} onChange={e=>setMode(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="fastest">Fastest each lap</option><option value="top10">Median fastest 10</option><option value="top20">Median fastest 20</option><option value="driver">Selected driver</option></select></label>
    <label style={{fontSize:10,color:muted}}>Display<select value={view} onChange={e=>setView(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="delta">Gap to benchmark</option><option value="time">Lap time</option></select></label>
    <label style={{fontSize:10,color:muted}}>Lap range<select value={windowSize} onChange={e=>setWindowSize(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="25">Last 25</option><option value="50">Last 50</option><option value="100">Last 100</option><option value="all">All laps</option></select></label>
    <label style={{display:"flex",alignItems:"center",gap:5,fontSize:10,color:muted}}><input type="checkbox" checked={includeSlow} onChange={e=>setIncludeSlow(e.target.checked)}/> Include pit laps / outliers</label>
   </div>
-  <div style={{fontSize:10,fontWeight:700,marginBottom:6}}>{label} · {shown.length} laps <span style={{fontWeight:400,color:muted}}> · scroll horizontally</span></div>
+  <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",fontSize:10,fontWeight:700,marginBottom:6}}>
+   <span>{label} · {shown.length} laps · {favorites.length} favorites</span>
+   <span style={{color:accent}}>★ {overall?("#"+(numberData[overall.name]||"?")+" "+overall.time.toFixed(3)+" · L"+overall.lap):"No valid laps"}</span>
+  </div>
   <div style={{overflowX:"auto",overflowY:"auto",maxHeight:620,border:"1px solid "+border,borderRadius:8}}>
-   <table style={{borderCollapse:"separate",borderSpacing:0,fontSize:10,fontFamily:"monospace",minWidth:Math.max(640,180+shown.length*65)}}>
-    <thead><tr><th style={{position:"sticky",left:0,top:0,zIndex:3,textAlign:"left",padding:8,background:panel,color:muted}}>DRIVER</th>{shown.map(l=><th key={l} style={{position:"sticky",top:0,padding:8,background:panel,color:muted}}>L{l}</th>)}</tr></thead>
-    <tbody>{driverNames.map(n=><tr key={n}><th style={{position:"sticky",left:0,zIndex:1,textAlign:"left",whiteSpace:"nowrap",padding:8,background:n===selectedDriver?(dark?"#173452":"#e8f2ff"):panel,color:n===selectedDriver?accent:fg}}>{numberData[n]?"#"+numberData[n]+" ":""}{n}</th>{shown.map(l=>{const t=time(n,l),b=base(l),d=t!=null&&b!=null?t-b:null;return <td key={l} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",color:view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent"}}>{t==null?"—":view==="time"?t.toFixed(3):(d>0?"+":"")+d.toFixed(3)}</td>})}</tr>)}</tbody>
+   <table style={{borderCollapse:"separate",borderSpacing:0,fontSize:10,fontFamily:"monospace",minWidth:Math.max(640,220+shown.length*65)}}>
+    <thead><tr><th style={{position:"sticky",left:0,top:0,zIndex:3,textAlign:"left",padding:8,background:panel,color:muted,minWidth:180}}>DRIVER</th>{shown.map(l=><th key={l} onClick={()=>toggleSort(l)} title="Tap to sort by this lap" style={{position:"sticky",top:0,padding:8,background:panel,color:sortLap===l?accent:muted,cursor:"pointer",whiteSpace:"nowrap"}}>L{l}{sortLap===l?(sortDir===1?" ↑":" ↓"):" ↕"}</th>)}</tr></thead>
+    <tbody>{ordered.map(n=><tr key={n}><th style={{position:"sticky",left:0,zIndex:1,textAlign:"left",whiteSpace:"nowrap",padding:"6px 8px",background:favorites.includes(n)?(dark?"#172c43":"#eaf3ff"):n===selectedDriver?(dark?"#173452":"#e8f2ff"):panel,color:n===selectedDriver?accent:fg}}>
+      <button onClick={()=>onToggleFavorite&&onToggleFavorite(n)} aria-label={favorites.includes(n)?"Remove favorite":"Add favorite"} style={{border:0,background:"transparent",color:favorites.includes(n)?"#f5b942":muted,fontSize:16,padding:"0 6px 0 0",cursor:"pointer"}}>{favorites.includes(n)?"★":"☆"}</button>{numberData[n]?"#"+numberData[n]+" ":""}{n}{favorites.includes(n)?<span style={{fontSize:8,color:"#f5b942",marginLeft:5}}>FAV</span>:null}</th>{shown.map(l=>{const t=time(n,l),b=base(l),d=t!=null&&b!=null?t-b:null,isFast=t!=null&&fastestByLap[l]?.name===n,isOverall=overall?.name===n&&overall?.lap===l;return <td key={l} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",fontWeight:isFast?800:400,color:isFast?"#22c55e":view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:isOverall?(dark?"#365314":"#ecfccb"):isFast?(dark?"#14532d88":"#dcfce7"):view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent"}}>{t==null?"—":view==="time"?t.toFixed(3):(d>0?"+":"")+d.toFixed(3)}{isFast?" ★":""}</td>})}</tr>)}</tbody>
    </table>
   </div>
-  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Negative = faster than benchmark. Top-10 / top-20 is the median of the fastest available drivers on each lap. By default, laps more than five seconds slower than a driver's best are hidden as likely pit laps or outliers. This view does not adjust for tire age or track evolution.</div>
+  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Favorites are grouped first. Lap headers sort all drivers by that lap; tap again to reverse. Green stars mark the fastest valid lap in each column. Gold highlights the fastest lap in the displayed range. Outlier filtering is unchanged; tire age and track evolution are not adjusted.</div>
   </>}
  </div>;
 }
@@ -533,6 +545,7 @@ export default function App() {
   const [compDrivers, setCompDrivers] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [pView, setPView] = useState("dashboard");
+  const [practiceLapFavorites, setPracticeLapFavorites] = useState([]);
   const [pGroup, setPGroup] = useState(0);
   const [practiceCompareDriver, setPracticeCompareDriver] = useState("");
   const [practicePrimaryRunIndex, setPracticePrimaryRunIndex] = useState(0);
@@ -1598,7 +1611,7 @@ export default function App() {
             </div>
           )}
 
-          {pView === "lapbylap" && <><div style={{padding:"8px 12px",fontSize:11,color:sub}}>Matrix source: {usingPH ? "archived practice" : "current session"} · {pNA.length} drivers · {Object.values(pL || {}).reduce((sum,rows)=>sum+(Array.isArray(rows)?rows.length:0),0)} lap records</div><PracticeMatrixErrorBoundary><PracticeLapMatrix lapsByDriver={pL} names={pNA} numbers={pN} selectedDriver={pPri} dark={dark} accent={acc} /></PracticeMatrixErrorBoundary></>}
+          {pView === "lapbylap" && <><div style={{padding:"8px 12px",fontSize:11,color:sub}}>Matrix source: {usingPH ? "archived practice" : "current session"} · {pNA.length} drivers · {Object.values(pL || {}).reduce((sum,rows)=>sum+(Array.isArray(rows)?rows.length:0),0)} lap records</div><PracticeMatrixErrorBoundary><PracticeLapMatrix lapsByDriver={pL} names={pNA} numbers={pN} selectedDriver={pPri} dark={dark} accent={acc} favorites={practiceLapFavorites} onToggleFavorite={(name)=>setPracticeLapFavorites(prev=>prev.includes(name)?prev.filter(x=>x!==name):[...prev,name])} /></PracticeMatrixErrorBoundary></>}
 
           {pView === "chart" && (
             <div style={{ padding: "8px 4px 0" }}>
