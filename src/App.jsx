@@ -268,7 +268,7 @@ function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accen
  const time=(n,l)=>{const t=maps[n]?.get(l);return t>0&&Number.isFinite(t)&&(includeSlow||best[n]==null||t<=best[n]+5)?t:null;};
  const base=l=>{if(mode==="driver")return time(selectedDriver,l);const v=driverNames.map(n=>time(n,l)).filter(x=>x!=null).sort((a,b)=>a-b);if(!v.length)return null;if(mode==="fastest")return v[0];const top=v.slice(0,Math.min(mode==="top20"?20:10,v.length)),m=Math.floor(top.length/2);return top.length%2?top[m]:(top[m-1]+top[m])/2;};
  const fastestByLap=Object.fromEntries(shown.map(l=>{const entries=driverNames.map(n=>({name:n,time:time(n,l)})).filter(x=>x.time!=null).sort((a,b)=>a.time-b.time);return [l,entries[0]||null];}));
- const overall=driverNames.flatMap(n=>shown.map(l=>({name:n,lap:l,time:time(n,l)}))).filter(x=>x.time!=null).sort((a,b)=>a.time-b.time)[0];
+
  const label=mode==="fastest"?"Fastest driver":mode==="top10"?"Top-10 median":mode==="top20"?"Top-20 median":"Selected driver";
  const ordered=[...driverNames].sort((a,b)=>{
   const af=favorites.includes(a),bf=favorites.includes(b);
@@ -289,16 +289,16 @@ function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accen
   </div>
   <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",fontSize:10,fontWeight:700,marginBottom:6}}>
    <span>{label} · {shown.length} laps · {favorites.length} favorites</span>
-   <span style={{color:accent}}>★ {overall?("#"+(numberData[overall.name]||"?")+" "+overall.time.toFixed(3)+" · L"+overall.lap):"No valid laps"}</span>
+   <span style={{color:"#22c55e"}}>★ Fastest on track each lap</span>
   </div>
   <div style={{overflowX:"auto",overflowY:"auto",maxHeight:620,border:"1px solid "+border,borderRadius:8}}>
    <table style={{borderCollapse:"separate",borderSpacing:0,fontSize:10,fontFamily:"monospace",minWidth:Math.max(640,220+shown.length*65)}}>
     <thead><tr><th style={{position:"sticky",left:0,top:0,zIndex:3,textAlign:"left",padding:8,background:panel,color:muted,minWidth:180}}>DRIVER</th>{shown.map(l=><th key={l} onClick={()=>toggleSort(l)} title="Tap to sort by this lap" style={{position:"sticky",top:0,padding:8,background:panel,color:sortLap===l?accent:muted,cursor:"pointer",whiteSpace:"nowrap"}}>L{l}{sortLap===l?(sortDir===1?" ↑":" ↓"):" ↕"}</th>)}</tr></thead>
     <tbody>{ordered.map(n=><tr key={n}><th style={{position:"sticky",left:0,zIndex:1,textAlign:"left",whiteSpace:"nowrap",padding:"6px 8px",background:favorites.includes(n)?(dark?"#172c43":"#eaf3ff"):n===selectedDriver?(dark?"#173452":"#e8f2ff"):panel,color:n===selectedDriver?accent:fg}}>
-      <button onClick={()=>onToggleFavorite&&onToggleFavorite(n)} aria-label={favorites.includes(n)?"Remove favorite":"Add favorite"} style={{border:0,background:"transparent",color:favorites.includes(n)?"#f5b942":muted,fontSize:16,padding:"0 6px 0 0",cursor:"pointer"}}>{favorites.includes(n)?"★":"☆"}</button>{numberData[n]?"#"+numberData[n]+" ":""}{n}{favorites.includes(n)?<span style={{fontSize:8,color:"#f5b942",marginLeft:5}}>FAV</span>:null}</th>{shown.map(l=>{const t=time(n,l),b=base(l),d=t!=null&&b!=null?t-b:null,isFast=t!=null&&fastestByLap[l]?.name===n,isOverall=overall?.name===n&&overall?.lap===l;return <td key={l} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",fontWeight:isFast?800:400,color:isFast?"#22c55e":view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:isOverall?(dark?"#365314":"#ecfccb"):isFast?(dark?"#14532d88":"#dcfce7"):view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent"}}>{t==null?"—":view==="time"?t.toFixed(3):(d>0?"+":"")+d.toFixed(3)}{isFast?" ★":""}</td>})}</tr>)}</tbody>
+      <button onClick={()=>onToggleFavorite&&onToggleFavorite(n)} aria-label={favorites.includes(n)?"Remove favorite":"Add favorite"} style={{border:0,background:"transparent",color:favorites.includes(n)?"#f5b942":muted,fontSize:16,padding:"0 6px 0 0",cursor:"pointer"}}>{favorites.includes(n)?"★":"☆"}</button>{numberData[n]?"#"+numberData[n]+" ":""}{n}{favorites.includes(n)?<span style={{fontSize:8,color:"#f5b942",marginLeft:5}}>FAV</span>:null}</th>{shown.map(l=>{const t=time(n,l),b=base(l),d=t!=null&&b!=null?t-b:null,isFast=t!=null&&fastestByLap[l]?.name===n;return <td key={l} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",fontWeight:isFast?800:400,color:isFast?"#22c55e":view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:isFast?(dark?"#14532d88":"#dcfce7"):view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent"}}>{t==null?"—":view==="time"?t.toFixed(3):(d>0?"+":"")+d.toFixed(3)}{isFast?" ★":""}</td>})}</tr>)}</tbody>
    </table>
   </div>
-  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Favorites are grouped first. Lap headers sort all drivers by that lap; tap again to reverse. Green stars mark the fastest valid lap in each column. Gold highlights the fastest lap in the displayed range. Outlier filtering is unchanged; tire age and track evolution are not adjusted.</div>
+  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Favorites are grouped first. Lap headers sort all drivers by that lap; tap again to reverse. Green stars mark the fastest driver on that exact lap number across the field. This is a same-lap comparison, not each driver’s personal best. Outlier filtering is unchanged; tire age and track evolution are not adjusted.</div>
   </>}
  </div>;
 }
