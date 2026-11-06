@@ -253,7 +253,7 @@ class PracticeMatrixErrorBoundary extends React.Component {
  }
 }
 
-function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accent,favorites=[],onToggleFavorite}) {
+function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accent,runAnalysis={},favorites=[],onToggleFavorite}) {
  const [mode,setMode]=useState("top10"), [view,setView]=useState("time"), [windowSize,setWindowSize]=useState("50");
  const [includeSlow,setIncludeSlow]=useState(false), [sortLap,setSortLap]=useState(null), [sortDir,setSortDir]=useState(1);
  const border=dark?"#263247":"#dce2ea", panel=dark?"#111b2b":"#fff", muted=dark?"#8b9bb0":"#66758a", fg=dark?"#e8eef7":"#172235";
@@ -268,6 +268,7 @@ function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accen
  const time=(n,l)=>{const t=maps[n]?.get(l);return t>0&&Number.isFinite(t)&&(includeSlow||best[n]==null||t<=best[n]+5)?t:null;};
  const base=l=>{if(mode==="driver")return time(selectedDriver,l);const v=driverNames.map(n=>time(n,l)).filter(x=>x!=null).sort((a,b)=>a-b);if(!v.length)return null;if(mode==="fastest")return v[0];const top=v.slice(0,Math.min(mode==="top20"?20:10,v.length)),m=Math.floor(top.length/2);return top.length%2?top[m]:(top[m-1]+top[m])/2;};
  const fastestByLap=Object.fromEntries(shown.map(l=>{const entries=driverNames.map(n=>({name:n,time:time(n,l)})).filter(x=>x.time!=null).sort((a,b)=>a.time-b.time);return [l,entries[0]||null];}));
+ const runEnds=Object.fromEntries(driverNames.map(n=>{const runs=Array.isArray(runAnalysis?.[n]?.runs)?runAnalysis[n].runs:[];const ends=new Set();runs.slice(0,-1).forEach(run=>{if(Number.isFinite(Number(run.endLap)))ends.add(Number(run.endLap));});return [n,ends];}));
 
  const label=mode==="fastest"?"Fastest driver":mode==="top10"?"Top-10 median":mode==="top20"?"Top-20 median":"Selected driver";
  const ordered=[...driverNames].sort((a,b)=>{
@@ -295,10 +296,10 @@ function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accen
    <table style={{borderCollapse:"separate",borderSpacing:0,fontSize:10,fontFamily:"monospace",minWidth:Math.max(640,220+shown.length*65)}}>
     <thead><tr><th style={{position:"sticky",left:0,top:0,zIndex:3,textAlign:"left",padding:8,background:panel,color:muted,minWidth:180}}>DRIVER</th>{shown.map(l=><th key={l} onClick={()=>toggleSort(l)} title="Tap to sort by this lap" style={{position:"sticky",top:0,padding:8,background:panel,color:sortLap===l?accent:muted,cursor:"pointer",whiteSpace:"nowrap"}}>L{l}{sortLap===l?(sortDir===1?" ↑":" ↓"):" ↕"}</th>)}</tr></thead>
     <tbody>{ordered.map(n=><tr key={n}><th style={{position:"sticky",left:0,zIndex:1,textAlign:"left",whiteSpace:"nowrap",padding:"6px 8px",background:favorites.includes(n)?(dark?"#172c43":"#eaf3ff"):n===selectedDriver?(dark?"#173452":"#e8f2ff"):panel,color:n===selectedDriver?accent:fg}}>
-      <button onClick={()=>onToggleFavorite&&onToggleFavorite(n)} aria-label={favorites.includes(n)?"Remove favorite":"Add favorite"} style={{border:0,background:"transparent",color:favorites.includes(n)?"#f5b942":muted,fontSize:16,padding:"0 6px 0 0",cursor:"pointer"}}>{favorites.includes(n)?"★":"☆"}</button>{numberData[n]?"#"+numberData[n]+" ":""}{n}{favorites.includes(n)?<span style={{fontSize:8,color:"#f5b942",marginLeft:5}}>FAV</span>:null}</th>{shown.map(l=>{const t=time(n,l),b=base(l),d=t!=null&&b!=null?t-b:null,isFast=t!=null&&fastestByLap[l]?.name===n;return <td key={l} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",fontWeight:isFast?800:400,color:isFast?"#22c55e":view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:isFast?(dark?"#14532d88":"#dcfce7"):view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent"}}>{t==null?"—":view==="time"?t.toFixed(3):(d>0?"+":"")+d.toFixed(3)}{isFast?" ★":""}</td>})}</tr>)}</tbody>
+      <button onClick={()=>onToggleFavorite&&onToggleFavorite(n)} aria-label={favorites.includes(n)?"Remove favorite":"Add favorite"} style={{border:0,background:"transparent",color:favorites.includes(n)?"#f5b942":muted,fontSize:16,padding:"0 6px 0 0",cursor:"pointer"}}>{favorites.includes(n)?"★":"☆"}</button>{numberData[n]?"#"+numberData[n]+" ":""}{n}{favorites.includes(n)?<span style={{fontSize:8,color:"#f5b942",marginLeft:5}}>FAV</span>:null}</th>{shown.map(l=>{const t=time(n,l),b=base(l),d=t!=null&&b!=null?t-b:null,isFast=t!=null&&fastestByLap[l]?.name===n,isRunEnd=runEnds[n]?.has(l);return <td key={l} title={isRunEnd?"End of recorded on-track run":isFast?"Fastest recorded time on this lap":undefined} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",fontWeight:isFast?800:400,color:isFast?"#22c55e":view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:isRunEnd?(dark?"#78350f66":"#fef3c7"):isFast?(dark?"#14532d88":"#dcfce7"):view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent",borderRight:isRunEnd?"3px solid #f59e0b":undefined}}>{t==null?"—":view==="time"?t.toFixed(3):(d>0?"+":"")+d.toFixed(3)}{isFast?" ★":""}{isRunEnd?" ▌":""}</td>})}</tr>)}</tbody>
    </table>
   </div>
-  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Favorites are grouped first. Lap headers sort all drivers by that lap; tap again to reverse. Green stars mark the fastest driver on that exact lap number across the field. This is a same-lap comparison, not each driver’s personal best. Outlier filtering is unchanged; tire age and track evolution are not adjusted.</div>
+  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Favorites are grouped first. Lap headers sort all drivers by that lap; tap again to reverse. Green stars mark the fastest driver on that exact lap number across the field. Amber cells and a thick right edge mark the end of a recorded run, using detected run boundaries from pit events, cautions, or gaps in that driver’s lap sequence. Inferred boundaries are estimates, not proof of a pit stop.</div>
   </>}
  </div>;
 }
@@ -1611,7 +1612,7 @@ export default function App() {
             </div>
           )}
 
-          {pView === "lapbylap" && <><div style={{padding:"8px 12px",fontSize:11,color:sub}}>Matrix source: {usingPH ? "archived practice" : "current session"} · {pNA.length} drivers · {Object.values(pL || {}).reduce((sum,rows)=>sum+(Array.isArray(rows)?rows.length:0),0)} lap records</div><PracticeMatrixErrorBoundary><PracticeLapMatrix lapsByDriver={pL} names={pNA} numbers={pN} selectedDriver={pPri} dark={dark} accent={acc} favorites={practiceLapFavorites} onToggleFavorite={(name)=>setPracticeLapFavorites(prev=>prev.includes(name)?prev.filter(x=>x!==name):[...prev,name])} /></PracticeMatrixErrorBoundary></>}
+          {pView === "lapbylap" && <><div style={{padding:"8px 12px",fontSize:11,color:sub}}>Matrix source: {usingPH ? "archived practice" : "current session"} · {pNA.length} drivers · {Object.values(pL || {}).reduce((sum,rows)=>sum+(Array.isArray(rows)?rows.length:0),0)} lap records</div><PracticeMatrixErrorBoundary><PracticeLapMatrix lapsByDriver={pL} names={pNA} numbers={pN} selectedDriver={pPri} dark={dark} accent={acc} runAnalysis={pRUN} favorites={practiceLapFavorites} onToggleFavorite={(name)=>setPracticeLapFavorites(prev=>prev.includes(name)?prev.filter(x=>x!==name):[...prev,name])} /></PracticeMatrixErrorBoundary></>}
 
           {pView === "chart" && (
             <div style={{ padding: "8px 4px 0" }}>
