@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useLiveSession } from "./useLiveSession";
 import { useHistorySession } from "./useHistorySession";
@@ -237,6 +237,20 @@ function PracticeCompCard({ name, primary, dark, BEST, EOR, NUM, GROUPS, extraWi
       </div>
     </div>
   );
+}
+
+class PracticeMatrixErrorBoundary extends React.Component {
+ constructor(props) { super(props); this.state={error:null}; }
+ static getDerivedStateFromError(error) { return {error}; }
+ componentDidCatch(error,info) { console.error("Practice Lap Matrix failed",error,info); }
+ render() {
+  if(this.state.error) return <div style={{padding:16,margin:12,border:"1px solid #ef4444",borderRadius:8,color:"#ef4444",fontSize:12}}>
+   <strong>Lap-by-lap rendering error</strong>
+   <div style={{marginTop:8,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{String(this.state.error.message||this.state.error)}</div>
+   <button onClick={()=>this.setState({error:null})} style={{marginTop:10,padding:8}}>Retry matrix</button>
+  </div>;
+  return this.props.children;
+ }
 }
 
 function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accent}) {
@@ -1584,7 +1598,7 @@ export default function App() {
             </div>
           )}
 
-          {pView === "lapbylap" && <PracticeLapMatrix lapsByDriver={pL} names={pNA} numbers={pN} selectedDriver={pPri} dark={dark} accent={acc} />}
+          {pView === "lapbylap" && <><div style={{padding:"8px 12px",fontSize:11,color:sub}}>Matrix source: {usingPH ? "archived practice" : "current session"} · {pNA.length} drivers · {Object.values(pL || {}).reduce((sum,rows)=>sum+(Array.isArray(rows)?rows.length:0),0)} lap records</div><PracticeMatrixErrorBoundary><PracticeLapMatrix lapsByDriver={pL} names={pNA} numbers={pN} selectedDriver={pPri} dark={dark} accent={acc} /></PracticeMatrixErrorBoundary></>}
 
           {pView === "chart" && (
             <div style={{ padding: "8px 4px 0" }}>
