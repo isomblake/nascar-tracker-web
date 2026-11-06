@@ -421,13 +421,15 @@ export default function App() {
   const [dark, setDark] = useState(true);
   const [mode, setMode] = useState("race");
 
-  // Auto-switch to Practice tab when a practice session goes live
+  // Keep the app on the Practice view for the latest practice session even after it ends.
+  // Switch back to Race automatically when a new race session is detected.
   useEffect(() => {
-    if (session?.is_active &&
-        (session?.session_type === 'practice1' || session?.session_type === 'practice2')) {
+    if (session?.session_type === 'practice1' || session?.session_type === 'practice2') {
       setMode("practice");
+    } else if (session?.session_type === 'race') {
+      setMode("race");
     }
-  }, [session?.id, session?.is_active, session?.session_type]);
+  }, [session?.id, session?.session_type]);
 
   // ── History state ──────────────────────────────────────────────
   const [historySessionId, setHistorySessionId] = useState(null);
@@ -1359,7 +1361,7 @@ export default function App() {
             <div style={{ fontSize: 10, color: usingPH ? acc : sub }}>
               {usingPH
                 ? `${pSess?.track_name || ""} · ${pSess?.session_type?.toUpperCase() || ""} · ${pSess?.session_date || ""}`
-                : session?.track_name ? `LIVE · ${session.track_name}` : "No live session"}
+                : session?.track_name ? `${session?.is_active ? "LIVE" : "FINAL"} · ${session.track_name}` : "No practice session"}
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               {usingPH && (
