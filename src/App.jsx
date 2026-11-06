@@ -1471,7 +1471,7 @@ export default function App() {
 
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
             {["Dashboard", "Lap by Lap", "Chart"].map((t) => (
-              <button key={t} onClick={() => setPView(t.toLowerCase().replace(" ", ""))} style={{ flex: 1, padding: "10px", background: "transparent", color: pView === t.toLowerCase().replace(" ", "") ? acc : sub, border: "none", borderBottom: pView === t.toLowerCase().replace(" ", "") ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
+              <button key={t} onClick={() => setPView(t.toLowerCase().replaceAll(" ", ""))} style={{ flex: 1, padding: "10px", background: "transparent", color: pView === t.toLowerCase().replaceAll(" ", "") ? acc : sub, border: "none", borderBottom: pView === t.toLowerCase().replaceAll(" ", "") ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
             ))}
           </div>
 
