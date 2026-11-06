@@ -9,6 +9,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
+import { buildDriverRunAnalysis, isTireChangePitStop } from './engineeringMetrics';
 
 const PIT_MARGIN_SECONDS = 5;
 const ABSOLUTE_MAX_LAP = 300;
@@ -42,7 +43,10 @@ function bestWindow(laps, n) {
   if (laps.length < n) return null;
   let best = Infinity;
   for (let i = 0; i <= laps.length - n; i++) {
-    const avg = laps.slice(i, i + n).reduce((a, [, t]) => a + t, 0) / n;
+    const window = laps.slice(i, i + n);
+    // A removed pit/caution/slow lap or a missing source lap breaks consecutiveness.
+    if (window.some((row, j) => j > 0 && Number(row[0]) !== Number(window[j - 1][0]) + 1)) continue;
+    const avg = window.reduce((a, [, t]) => a + t, 0) / n;
     if (avg < best) best = avg;
   }
   return best === Infinity ? null : best;
@@ -112,6 +116,7 @@ export function useHistorySession(sessionId) {
   const [session, setSession] = useState(null);
   const [drivers, setDrivers] = useState([]);
   const [rawLaps, setRawLaps] = useState([]);
+  const [rawPitStops, setRawPitStops] = useState([]);
   const [status, setStatus] = useState('idle'); // idle | loading | loaded | error
 
   useEffect(() => {
@@ -148,7 +153,7 @@ export function useHistorySession(sessionId) {
         while (!cancelled) {
           const { data: chunk, error: lErr } = await supabase
             .from('laps')
-            .select('driver_key, lap_number, lap_time')
+            .select('driver_key, lap_number, lap_time, is_pit, is_caution, recorded_at')
             .eq('session_id', sessionId)
             .order('lap_number', { ascending: true })
             .range(from, from + PAGE - 1);
@@ -158,8 +163,15 @@ export function useHistorySession(sessionId) {
           if (chunk.length < PAGE) break;
           from += PAGE;
         }
+        const { data: pitStops } = await supabase
+          .from('race_events')
+          .select('driver_key, lap_number, details, recorded_at')
+          .eq('session_id', sessionId)
+          .eq('event_type', 'pit_stop')
+          .order('lap_number', { ascending: true });
         if (!cancelled) {
           setRawLaps(all);
+          setRawPitStops(pitStops || []);
           setStatus('loaded');
         }
       } catch {
@@ -171,14 +183,25 @@ export function useHistorySession(sessionId) {
   }, [sessionId]);
 
   const derived = useMemo(() => {
-    const cautionSet = detectCautionLaps(rawLaps);
-    const byDriver = {};
+    // Deduplicate poll snapshots: one authoritative record per driver/session lap.
+    // Prefer the most recently recorded snapshot, retaining its flags and corrected time.
+    const uniqueLapRows = new Map();
     for (const row of rawLaps) {
+      const key = String(row.driver_key) + ":" + Number(row.lap_number);
+      const prior = uniqueLapRows.get(key);
+      if (!prior || String(row.recorded_at || "") >= String(prior.recorded_at || "")) uniqueLapRows.set(key, row);
+    }
+    const canonicalLaps = [...uniqueLapRows.values()].sort((a,b)=>Number(a.lap_number)-Number(b.lap_number));
+    const cautionSet = detectCautionLaps(canonicalLaps);
+    canonicalLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
+    const byDriver = {};
+    for (const row of canonicalLaps) {
       if (!byDriver[row.driver_key]) byDriver[row.driver_key] = [];
-      byDriver[row.driver_key].push([row.lap_number, parseFloat(row.lap_time)]);
+      byDriver[row.driver_key].push([Number(row.lap_number), parseFloat(row.lap_time)]);
     }
 
     const BEST = {}, EOR = {}, LAPS = {}, NUM = {}, CLR = {}, GROUPS = {};
+    const RUN_ANALYSIS = {}, PIT_STOPS = {};
 
     for (const d of drivers) {
       const dkey = d.driver_key;
@@ -187,6 +210,12 @@ export function useHistorySession(sessionId) {
       GROUPS[name] = normalizePracticeGroup(d.practice_group);
 
       const stats = computeDriverStats(byDriver[dkey] || [], cautionSet);
+      const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
+      RUN_ANALYSIS[name] = buildDriverRunAnalysis(
+        stats.laps,
+        { cautionLaps: [...cautionSet], pitLaps: [...driverPitStops.filter(isTireChangePitStop).map((stop) => stop.lap_number), ...(canonicalLaps.filter(row=>row.driver_key===dkey&&row.is_pit===true).map(row=>row.lap_number))] }
+      );
+      PIT_STOPS[name] = driverPitStops;
       BEST[name] = stats.best;
       EOR[name] = stats.eor;
       LAPS[name] = stats.laps;
@@ -199,8 +228,8 @@ export function useHistorySession(sessionId) {
       .map((d) => d.full_name)
       .sort((a, b) => (parseInt(NUM[a], 10) || 99) - (parseInt(NUM[b], 10) || 99));
 
-    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, NAMES, cautionSet };
-  }, [drivers, rawLaps]);
+    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, RUN_ANALYSIS, PIT_STOPS, NAMES, cautionSet };
+  }, [drivers, rawLaps, rawPitStops]);
 
-  return { session, status, ...derived };
+  return { session, status, rawPitStops, ...derived };
 }

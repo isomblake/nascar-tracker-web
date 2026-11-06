@@ -1,10 +1,11 @@
-import { useState, useMemo, useCallback, useEffect } from "react";
+import React, { useState, useMemo, useCallback, useEffect } from "react";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { useLiveSession } from "./useLiveSession";
 import { useHistorySession } from "./useHistorySession";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
+import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap, estimatePaceDeficitPerLap, getPitStopTireCount } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -34,6 +35,13 @@ const thrFor = (BEST, driver) => {
 /* ═══ HELPERS ═══ */
 const sn = (n) => (n ? n.split(" ").pop() : "—");
 const ft = (t) => (t != null ? t.toFixed(3) : "—");
+const pitRoadDuration = (details) => {
+  if (details?.total_duration != null && Number.isFinite(Number(details.total_duration))) return Number(details.total_duration);
+  if (details?.pit_in_elapsed_time == null || details?.pit_out_elapsed_time == null) return null;
+  const pitIn = Number(details.pit_in_elapsed_time);
+  const pitOut = Number(details.pit_out_elapsed_time);
+  return Number.isFinite(pitIn) && Number.isFinite(pitOut) && pitOut >= pitIn ? pitOut - pitIn : null;
+};
 const MF = { fontFamily: "'SF Mono','Consolas',monospace", letterSpacing: "0.5px" };
 
 const rkColor = (r) => (r == null ? "#555" : r <= 3 ? "#22c55e" : r <= 10 ? "#eab308" : "#ef4444");
@@ -231,6 +239,90 @@ function PracticeCompCard({ name, primary, dark, BEST, EOR, NUM, GROUPS, extraWi
   );
 }
 
+class PracticeMatrixErrorBoundary extends React.Component {
+ constructor(props) { super(props); this.state={error:null}; }
+ static getDerivedStateFromError(error) { return {error}; }
+ componentDidCatch(error,info) { console.error("Practice Lap Matrix failed",error,info); }
+ render() {
+  if(this.state.error) return <div style={{padding:16,margin:12,border:"1px solid #ef4444",borderRadius:8,color:"#ef4444",fontSize:12}}>
+   <strong>Lap-by-lap rendering error</strong>
+   <div style={{marginTop:8,whiteSpace:"pre-wrap",overflowWrap:"anywhere"}}>{String(this.state.error.message||this.state.error)}</div>
+   <button onClick={()=>this.setState({error:null})} style={{marginTop:10,padding:8}}>Retry matrix</button>
+  </div>;
+  return this.props.children;
+ }
+}
+
+function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accent,runAnalysis={},favorites=[],onToggleFavorite}) {
+ const [mode,setMode]=useState("top10"), [view,setView]=useState("time"), [windowSize,setWindowSize]=useState("50");
+ const [sortLap,setSortLap]=useState(null), [sortDir,setSortDir]=useState(1);
+ const border=dark?"#263247":"#dce2ea", panel=dark?"#111b2b":"#fff", muted=dark?"#8b9bb0":"#66758a", fg=dark?"#e8eef7":"#172235";
+ const driverNames=Array.isArray(names)?names:[];
+ const lapData=lapsByDriver&&typeof lapsByDriver==="object"?lapsByDriver:{};
+ const numberData=numbers&&typeof numbers==="object"?numbers:{};
+ const validLaps=(n)=>Array.isArray(lapData[n])?lapData[n].filter(x=>Array.isArray(x)&&x.length>=2&&Number.isFinite(Number(x[0]))&&Number(x[1])>0&&Number.isFinite(Number(x[1]))).sort((a,b)=>Number(a[0])-Number(b[0])):[];
+ // Matrix columns are each driver's own completed-lap sequence, not the shared session lap_number.
+ const sequences=Object.fromEntries(driverNames.map(n=>[n,validLaps(n).map((x,i)=>({index:i+1,sourceLap:Number(x[0]),time:Number(x[1])}))]));
+ const maxLaps=Math.max(0,...driverNames.map(n=>sequences[n].length));
+ const laps=Array.from({length:maxLaps},(_,i)=>i+1);
+ const shown=windowSize==="all"?laps:laps.slice(-Number(windowSize));
+ const maps=Object.fromEntries(driverNames.map(n=>[n,new Map(sequences[n].map(x=>[x.index,x.time]))]));
+ const sourceLapToIndex=Object.fromEntries(driverNames.map(n=>[n,new Map(sequences[n].map(x=>[x.sourceLap,x.index]))]));
+ const best=Object.fromEntries(driverNames.map(n=>{const times=sequences[n].map(x=>x.time);return [n,times.length?Math.min(...times):null];}));
+ const rawTime=(n,l)=>{const t=maps[n]?.get(l);return t>0&&Number.isFinite(t)?t:null;};
+ const time=(n,l)=>{const t=rawTime(n,l);return t!=null&&(best[n]==null||t<=best[n]+5)?t:null;};
+ // Best rolling 10-lap average. Missing source lap numbers and slow/outlier laps break a qualifying window.
+ const best10=Object.fromEntries(driverNames.map(n=>{
+  const rows=sequences[n];let fastest=null;
+  for(let i=9;i<rows.length;i++){
+   const w=rows.slice(i-9,i+1);
+   if(w.some((x,j)=>j>0&&x.sourceLap!==w[j-1].sourceLap+1))continue;
+   const valid=w.map(x=>time(n,x.index));
+   if(valid.some(x=>x==null))continue;
+   const avg=valid.reduce((sum,x)=>sum+x,0)/10;
+   if(fastest==null||avg<fastest.avg)fastest={avg,fromLap:w[0].sourceLap,toLap:w[9].sourceLap,fromIndex:w[0].index,toIndex:w[9].index};
+  }
+  return [n,fastest];
+ }));
+ const ranked10=driverNames.map(n=>({name:n,...(best10[n]||{})})).filter(x=>Number.isFinite(x.avg)).sort((a,b)=>a.avg-b.avg);
+ const median=values=>{if(!values.length)return null;const v=[...values].sort((a,b)=>a-b),m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2;};
+ const benchmark=mode==="driver"?(best10[selectedDriver]?.avg??null):mode==="fastest"?(ranked10[0]?.avg??null):mode==="fieldMedian"?median(ranked10.map(x=>x.avg)):median(ranked10.slice(0,Math.min(mode==="top20"?20:10,ranked10.length)).map(x=>x.avg));
+ const base=()=>benchmark;
+ const fastestByLap=Object.fromEntries(shown.map(l=>{const entries=driverNames.map(n=>({name:n,time:time(n,l)})).filter(x=>x.time!=null).sort((a,b)=>a.time-b.time);return [l,entries[0]||null];}));
+ const runEnds=Object.fromEntries(driverNames.map(n=>{const runs=Array.isArray(runAnalysis?.[n]?.runs)?runAnalysis[n].runs:[];const ends=new Set();runs.slice(0,-1).forEach(run=>{const index=sourceLapToIndex[n]?.get(Number(run.endLap));if(index!=null)ends.add(index);});return [n,ends];}));
+ const label=mode==="fastest"?"Fastest 10-consecutive average":mode==="fieldMedian"?"Field median 10-consecutive":mode==="top10"?"Top-10 median 10-consecutive":mode==="top20"?"Top-20 median 10-consecutive":"Selected driver 10-consecutive";
+ const ordered=[...driverNames].sort((a,b)=>{
+  const af=favorites.includes(a),bf=favorites.includes(b);
+  if(af!==bf)return af?-1:1;
+  if(sortLap!=null){const at=time(a,sortLap),bt=time(b,sortLap);if(at==null&&bt!=null)return 1;if(bt==null&&at!=null)return -1;if(at!=null&&bt!=null&&at!==bt)return (at-bt)*sortDir;}
+  return (parseInt(numberData[a],10)||999)-(parseInt(numberData[b],10)||999);
+ });
+ const toggleSort=l=>{if(sortLap===l)setSortDir(d=>-d);else{setSortLap(l);setSortDir(1);}};
+ return <div style={{padding:12,minHeight:180}}>
+  <div style={{fontSize:14,fontWeight:800,marginBottom:4}}>Lap-by-lap comparison</div>
+  <div style={{fontSize:10,color:muted,marginBottom:10}}>Each column is that driver's own lap count. Star drivers to pin them to the top; tap a lap header to rank the field by that lap number.</div>
+  {driverNames.length===0||laps.length===0 ? <div style={{padding:18,textAlign:"center",border:"1px solid "+border,borderRadius:8,color:muted,fontSize:12}}>{driverNames.length===0?"Driver data is still loading for this session.":"No lap times are available for this session yet."}</div> : <>
+  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
+   <label style={{fontSize:10,color:muted}}>Benchmark<select value={mode} onChange={e=>setMode(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="fastest">Fastest driver's best 10 consecutive</option><option value="fieldMedian">Field median (best 10 consecutive)</option><option value="top10">Top-10 median (best 10 consecutive)</option><option value="top20">Top-20 median (best 10 consecutive)</option><option value="driver">Selected driver's best 10 consecutive</option></select></label>
+   <label style={{fontSize:10,color:muted}}>Display<select value={view} onChange={e=>setView(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="delta">Gap to benchmark</option><option value="time">Lap time</option></select></label>
+   <label style={{fontSize:10,color:muted}}>Lap range<select value={windowSize} onChange={e=>setWindowSize(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="25">Last 25</option><option value="50">Last 50</option><option value="100">Last 100</option><option value="all">All laps</option></select></label>
+   <div style={{fontSize:10,color:muted,alignSelf:"end"}}>Slow laps remain visible but are excluded from benchmarks and fastest-lap metrics. A qualifying 10-lap window requires ten consecutive source lap numbers with no slow or missing lap.</div>
+  </div>
+  <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",fontSize:10,fontWeight:700,marginBottom:6}}>
+   <span>{label} · {benchmark==null?"No qualifying 10-lap runs":benchmark.toFixed(3)+" sec/lap"} · {ranked10.length} qualified · {favorites.length} favorites</span>
+   <span style={{color:"#22c55e"}}>★ Fastest valid lap each lap</span>
+  </div>
+  <div style={{overflowX:"auto",overflowY:"auto",maxHeight:620,border:"1px solid "+border,borderRadius:8}}>
+   <table style={{borderCollapse:"separate",borderSpacing:0,fontSize:10,fontFamily:"monospace",minWidth:Math.max(640,220+shown.length*65)}}>
+    <thead><tr><th style={{position:"sticky",left:0,top:0,zIndex:3,textAlign:"left",padding:8,background:panel,color:muted,minWidth:180}}>DRIVER</th>{shown.map(l=><th key={l} onClick={()=>toggleSort(l)} title="Tap to sort by this driver's lap number" style={{position:"sticky",top:0,padding:8,background:panel,color:sortLap===l?accent:muted,cursor:"pointer",whiteSpace:"nowrap"}}>L{l}{sortLap===l?(sortDir===1?" ↑":" ↓"):" ↕"}</th>)}</tr></thead>
+    <tbody>{ordered.map(n=><tr key={n}><th style={{position:"sticky",left:0,zIndex:1,textAlign:"left",whiteSpace:"nowrap",padding:"6px 8px",background:favorites.includes(n)?(dark?"#172c43":"#eaf3ff"):n===selectedDriver?(dark?"#173452":"#e8f2ff"):panel,color:n===selectedDriver?accent:fg}}>
+      <button onClick={()=>onToggleFavorite&&onToggleFavorite(n)} aria-label={favorites.includes(n)?"Remove favorite":"Add favorite"} style={{border:0,background:"transparent",color:favorites.includes(n)?"#f5b942":muted,fontSize:16,padding:"0 6px 0 0",cursor:"pointer"}}>{favorites.includes(n)?"★":"☆"}</button>{numberData[n]?"#"+numberData[n]+" ":""}{n}{favorites.includes(n)?<span style={{fontSize:8,color:"#f5b942",marginLeft:5}}>FAV</span>:null}</th>{shown.map(l=>{const raw=rawTime(n,l),t=time(n,l),b=base(),d=t!=null&&b!=null?t-b:null,isSlow=raw!=null&&t==null,isFast=t!=null&&fastestByLap[l]?.name===n,isRunEnd=runEnds[n]?.has(l);return <td key={l} title={isSlow?"Slow lap — displayed but excluded from benchmark metrics":isRunEnd?"End of recorded on-track run":isFast?"Fastest valid time for this driver lap number":undefined} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",fontWeight:isFast?800:400,color:isFast?"#22c55e":isSlow?"#d97706":view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:isFast?(dark?"#14532d88":"#dcfce7"):isSlow?(dark?"#78350f33":"#ffedd5"):view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent",borderRight:isRunEnd?(dark?"2px solid rgba(255,255,255,.65)":"2px solid #64748b"):undefined}}>{raw==null?"—":isSlow?raw.toFixed(3):view==="time"?raw.toFixed(3):(d>0?"+":"")+d.toFixed(3)}{isFast?" ★":""}</td>})}</tr>)}</tbody>
+   </table>
+  </div>
+  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Favorites are grouped first. Lap headers sort drivers by their own lap count; tap again to reverse. Green stars mark the fastest valid single lap among drivers on that lap count. Benchmark comparisons use each driver’s best valid 10-lap consecutive average, not cherry-picked laps. Slow laps remain visible in amber but are excluded from benchmark calculations and fastest-lap highlights. A thin white divider in dark mode or slate divider in light mode marks the end of a recorded run. Run boundaries are inferred from pit events, cautions, or gaps in each driver's recorded lap sequence.</div>
+  </>}
+ </div>;
+}
 function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggleComp, sortRank, sortKey, extraW, BEST, SIM_POS, NUM, LAST_LAP_TIME }) {
   const bdr = dark ? "#1e1e3a" : "#e0e0e0";
   const fg = dark ? "#e0e0e0" : "#1a1a1a";
@@ -281,22 +373,147 @@ function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggle
   );
 }
 
+
+/* ═══ RACE COMMAND COCKPIT ═══ */
+function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, EOR, STINT, primary, onSelectDriver, dark, status }) {
+  const [demoMode, setDemoMode] = useState(false);
+  const [demoScenario, setDemoScenario] = useState("3 laps down");
+  const [demoSelectedDriver, setDemoSelectedDriver] = useState("Brad Keselowski");
+  const demoNames = ["Kyle Larson", "William Byron", "Denny Hamlin", "Ryan Blaney", "Brad Keselowski", "Chase Elliott"];
+  const demoLapsDown = demoScenario === "1 lap down" ? 1 : demoScenario === "2 laps down" ? 2 : demoScenario === "on lead lap" ? 0 : 3;
+  const demoPace = demoScenario === "gaining" ? 29.4 : demoScenario === "on lead lap" ? 29.8 : 30.2;
+  const displayNames = demoMode ? demoNames : NAMES;
+  const displayNum = demoMode ? {"Kyle Larson":"5","William Byron":"24","Denny Hamlin":"11","Ryan Blaney":"12","Brad Keselowski":"6","Chase Elliott":"9"} : NUM;
+  const displayPos = demoMode ? {"Kyle Larson":1,"William Byron":2,"Denny Hamlin":3,"Ryan Blaney":4,"Brad Keselowski":5,"Chase Elliott":6} : SIM_POS;
+  const displayTiming = demoMode ? {
+    "Kyle Larson":{laps_completed:500,delta_leader:0},
+    "William Byron":{laps_completed:500,delta_leader:1.25},
+    "Denny Hamlin":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown},
+    "Ryan Blaney":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown},
+    "Brad Keselowski":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown},
+    "Chase Elliott":{laps_completed:500-demoLapsDown,delta_leader:-demoLapsDown}
+  } : TIMING;
+  const displayEor = demoMode ? {
+    "Kyle Larson":{t5:29.8},"William Byron":{t5:29.9},"Denny Hamlin":{t5:30.05},
+    "Ryan Blaney":{t5:30.1},"Brad Keselowski":{t5:demoPace},"Chase Elliott":{t5:30.0}
+  } : EOR;
+  const displayLastLap = demoMode ? {"Kyle Larson":29.7,"William Byron":29.9,"Denny Hamlin":30.0,"Ryan Blaney":30.1,"Brad Keselowski":demoPace,"Chase Elliott":30.0} : LAST_LAP_TIME;
+  const displaySession = demoMode ? {track_name:"Bristol Motor Speedway",session_type:"RACE",session_date:"SYNTHETIC DEMO",current_lap:500,laps_in_race:500,flag_state:1} : session;
+  const displayPrimary = demoMode ? demoSelectedDriver : primary;
+  const palette = {
+    bg: dark ? "#080d17" : "#f3f6fb",
+    panel: dark ? "#111b2b" : "#ffffff",
+    panel2: dark ? "#0c1421" : "#f7f9fc",
+    line: dark ? "#25344a" : "#dce4ef",
+    text: dark ? "#edf3fb" : "#142033",
+    muted: dark ? "#8292a8" : "#63738a",
+    accent: "#48a7ff",
+    green: "#39d98a",
+    yellow: "#f5bd4f",
+    red: "#ff647c"
+  };
+  const mono = { fontFamily: "'SF Mono','Consolas',monospace", fontVariantNumeric: "tabular-nums" };
+  const ordered = [...displayNames].sort((a,b) => (displayPos[a] || 99) - (displayPos[b] || 99));
+  const towerNames = ordered.slice(0, 12);
+  if (displayPrimary && !towerNames.includes(displayPrimary)) towerNames.push(displayPrimary);
+  const selected = displayTiming[displayPrimary] || {};
+  const leaderName = ordered.find(n => displayPos[n] === 1);
+  const leaderTiming = leaderName ? displayTiming[leaderName] : null;
+  const timeToLeader = formatOfficialLeaderGap(selected, leaderTiming);
+  const paceDeficit = timeToLeader?.type === "laps" && timeToLeader.value > 0
+    ? estimatePaceDeficitPerLap(displayEor[displayPrimary]?.t5, displayEor[leaderName]?.t5)
+    : null;
+  const ahead = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) - 1);
+  const behind = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) + 1);
+  const gapTo = (name) => {
+    const result = compareOfficialTiming(selected, displayTiming[name]);
+    if (result?.gapSeconds != null) return { label: (result.gapSeconds > 0 ? "+" : "") + fmt(result.gapSeconds, 2) + "s", value: result.gapSeconds };
+    if (result?.lapDelta != null && result.lapDelta !== 0) {
+      const laps = Math.abs(result.lapDelta);
+      return { label: laps + " lap" + (laps === 1 ? "" : "s") + (result.lapDelta < 0 ? " behind" : " ahead"), value: result.lapDelta };
+    }
+    return null;
+  };
+  const fmt = (v, digits=3) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(digits);
+  const statusLabel = status === "live" ? "LIVE DATA" : status === "no_session" ? "REPLAY / STORED DATA" : String(status || "CONNECTING").toUpperCase();
+  const flag = session?.flag_state;
+  const flagLabel = ({1:"GREEN",2:"YELLOW",3:"RED",4:"CHECKERED",8:"WARMUP",9:"COLD"})[flag] || "FLAG N/A";
+  const flagColor = flag === 1 ? palette.green : flag === 2 ? palette.yellow : flag === 3 ? palette.red : palette.muted;
+  const card = { background: palette.panel, border: "1px solid " + palette.line, borderRadius: 12 };
+  const metric = (label,value,detail) => <div style={{background:palette.panel2,border:"1px solid "+palette.line,borderRadius:9,padding:"11px 12px",minWidth:0}}><div style={{fontSize:9,letterSpacing:1.1,fontWeight:800,color:palette.muted}}>{label}</div><div style={{fontSize:22,fontWeight:850,color:palette.text,marginTop:4,...mono}}>{value}</div>{detail && <div style={{fontSize:10,color:palette.muted,marginTop:3}}>{detail}</div>}</div>;
+  return (
+    <section style={{margin:"14px 12px 18px",color:palette.text}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:10,marginBottom:10}}>
+        <div><div style={{fontSize:10,fontWeight:900,letterSpacing:2,color:palette.accent}}>RACE CONTROL / LIVE TIMING</div><div style={{fontSize:22,fontWeight:900,letterSpacing:-.6,marginTop:3}}>Race Command</div></div>
+        <div style={{textAlign:"right"}}><div style={{fontSize:9,fontWeight:900,letterSpacing:1.2,color:palette.muted}}>FEED STATUS</div><div style={{fontSize:11,fontWeight:900,color:demoMode?palette.yellow:status==="live"?palette.green:palette.yellow,marginTop:4}}>{demoMode?"DEMO MODE":statusLabel}</div></div>
+      </div>
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+        <button onClick={()=>setDemoMode(v=>!v)} style={{padding:"7px 11px",borderRadius:6,border:"1px solid "+palette.accent,background:demoMode?palette.accent:"transparent",color:demoMode?"#07111f":palette.accent,fontSize:10,fontWeight:900}}>{demoMode?"EXIT DEMO":"TRY DEMO DATA"}</button>
+        {demoMode && ["3 laps down","2 laps down","1 lap down","on lead lap","gaining"].map(s=><button key={s} onClick={()=>setDemoScenario(s)} style={{padding:"6px 8px",borderRadius:5,border:"1px solid "+palette.line,background:demoScenario===s?palette.panel2:"transparent",color:palette.text,fontSize:9,fontWeight:800}}>{s.toUpperCase()}</button>)}
+      </div>
+      <div style={{...card,padding:14,marginBottom:10,background:dark?"linear-gradient(120deg,#132b43,#101a2a 68%,#17243a)": "linear-gradient(120deg,#e5f2ff,#fff 70%,#eaf0fa)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+          <div style={{minWidth:0}}><div style={{fontSize:9,letterSpacing:1.4,fontWeight:900,color:palette.muted}}>TRACK / SESSION</div><div style={{fontSize:16,fontWeight:900,marginTop:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{displaySession?.track_name || "Session not identified"}</div><div style={{fontSize:10,color:palette.muted,marginTop:3}}>{String(displaySession?.session_type || "NO SESSION").replaceAll("_"," ").toUpperCase()} · {displaySession?.session_date || "—"}</div></div>
+          <div style={{textAlign:"right",flexShrink:0}}><div style={{fontSize:9,letterSpacing:1.2,fontWeight:900,color:palette.muted}}>RACE STATUS</div><div style={{fontSize:15,fontWeight:900,color:flagColor,marginTop:4}}>{demoMode ? "GREEN" : flagLabel}</div><div style={{fontSize:11,color:palette.muted,...mono,marginTop:3}}>LAP {displaySession?.current_lap ?? selected.laps_completed ?? "—"}{displaySession?.laps_in_race ? " / "+displaySession.laps_in_race : ""}</div></div>
+        </div>
+      </div>
+      <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
+        {metric("SELECTED DRIVER", "#"+(displayNum[displayPrimary] || "?")+" · "+displayPrimary.split(" ").slice(-1)[0], "P"+(displayPos[displayPrimary] || "—")+" · "+(selected.laps_completed ?? "—")+" laps completed")}
+        {metric("LAP DEFICIT", timeToLeader?.label || "—", "Official lap-count difference to leader")}
+        {metric("PACE DEFICIT / LAP", paceDeficit == null ? "—" : (paceDeficit > 0 ? "+" : "")+paceDeficit.toFixed(2)+"s", demoMode ? "Synthetic five-lap average vs leader" : "Estimated current-stint 5-lap average vs leader")}
+        {metric("LAST CLEAN LAP", fmt(displayLastLap[displayPrimary]), "Lap-time history filter excludes detected cautions / pit laps")}
+        {metric("LAST 5 LAP AVG", fmt(displayEor[displayPrimary]?.t5), "Current stint · latest five clean laps available")}
+      </div>
+      <div style={{...card,padding:12,marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official interval or lap-count difference</div></div>
+        {[["AHEAD",ahead],["BEHIND",behind]].map(([label,name]) => {
+          const d= name ? gapTo(name) : null;
+          return <div key={label} style={{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:8,alignItems:"center",padding:"9px 0",borderTop:"1px solid "+palette.line}}>
+            <div style={{fontSize:9,fontWeight:900,color:palette.muted,letterSpacing:1}}>{label}</div>
+            <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:800,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name ? "#"+(NUM[name]||"?")+" "+name : "No car "+label.toLowerCase()}</div><div style={{fontSize:9,color:palette.muted,marginTop:2}}>P{ name ? SIM_POS[name] : "—"} · {name ? (TIMING[name]?.laps_completed ?? "—")+" laps" : "—"}</div></div>
+            <div style={{fontSize:13,fontWeight:900,color:d==null?palette.muted:(typeof d.value==="number" && d.value>0)?palette.red:palette.green,...mono}}>{d?.label || "—"}</div>
+          </div>;
+        })}
+      </div>
+      <div style={{...card,overflow:"hidden"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px 10px"}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>LIVE TIMING TOWER</div><div style={{fontSize:9,color:palette.muted}}>TOP 12 + SELECTED DRIVER</div></div>
+        <div style={{display:"grid",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,padding:"7px 10px",background:palette.panel2,borderTop:"1px solid "+palette.line,borderBottom:"1px solid "+palette.line,fontSize:8,fontWeight:900,letterSpacing:.7,color:palette.muted}}>
+          <span>POS</span><span>DRIVER</span><span style={{textAlign:"right"}}>TO LEADER</span><span style={{textAlign:"right"}}>LAST</span><span style={{textAlign:"right"}}>5-LAP</span>
+        </div>
+        {towerNames.map(name => {
+          const p=displayTiming[name]||{}, active=name===displayPrimary;
+          return <button key={name} onClick={()=>demoMode?setDemoSelectedDriver(name):onSelectDriver(name)} style={{display:"grid",width:"100%",gridTemplateColumns:"34px minmax(0,1fr) 66px 66px 66px",gap:4,alignItems:"center",padding:"10px",textAlign:"left",border:0,borderBottom:"1px solid "+palette.line,background:active?(dark?"#173452":"#e5f2ff"):"transparent",color:palette.text,cursor:"pointer"}}>
+            <span style={{fontSize:13,fontWeight:900,color:active?palette.accent:palette.muted,...mono}}>{displayPos[name]||"—"}</span>
+            <span style={{minWidth:0}}><span style={{display:"block",fontSize:11,fontWeight:850,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>#{displayNum[name]||"?"} {name}</span><span style={{display:"block",fontSize:8,color:palette.muted,marginTop:2}}>{p.laps_completed??"—"} LAPS</span></span>
+            <span style={{textAlign:"right",fontSize:10,fontWeight:800,...mono}}>{formatOfficialLeaderGap(p,leaderTiming)?.label || "—"}</span>
+            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(displayLastLap[name])}</span>
+            <span style={{textAlign:"right",fontSize:10,...mono}}>{fmt(displayEor[name]?.t5)}</span>
+          </button>;
+        })}
+        <div style={{padding:"9px 11px",fontSize:9,lineHeight:1.5,color:palette.muted,borderTop:"1px solid "+palette.line}}>* Lapped cars show lap deficit plus estimated pace deficit per lap. Positive pace deficit means slower than the leader. Demo values are synthetic.</div>
+      </div>
+    </section>
+  );
+}
+
 /* ═══ MAIN ═══ */
 export default function App() {
   const live = useLiveSession();
-  const { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, NAMES, session, status, error, cautionSet } = live;
+  const { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, RUN_ANALYSIS, TIMING, PIT_STOPS, NAMES, session, status, error, cautionSet } = live;
   const isCaution = makeCautionCheck(cautionSet);
 
   const [dark, setDark] = useState(true);
   const [mode, setMode] = useState("race");
 
-  // Auto-switch to Practice tab when a practice session goes live
+  // Keep the app on the Practice view for the latest practice session even after it ends.
+  // Switch back to Race automatically when a new race session is detected.
   useEffect(() => {
-    if (session?.is_active &&
-        (session?.session_type === 'practice1' || session?.session_type === 'practice2')) {
+    if (session?.session_type === 'practice1' || session?.session_type === 'practice2') {
       setMode("practice");
+    } else if (session?.session_type === 'race') {
+      setMode("race");
     }
-  }, [session?.id, session?.is_active, session?.session_type]);
+  }, [session?.id, session?.session_type]);
 
   // ── History state ──────────────────────────────────────────────
   const [historySessionId, setHistorySessionId] = useState(null);
@@ -349,8 +566,17 @@ export default function App() {
   const [compDrivers, setCompDrivers] = useState([]);
   const [showSettings, setShowSettings] = useState(false);
   const [pView, setPView] = useState("dashboard");
+  const [practiceLapFavorites, setPracticeLapFavorites] = useState([]);
   const [pGroup, setPGroup] = useState(0);
-  useEffect(() => { setPGroup(0); }, [session?.id, practHistSessionId]);
+  const [practiceCompareDriver, setPracticeCompareDriver] = useState("");
+  const [practicePrimaryRunIndex, setPracticePrimaryRunIndex] = useState(0);
+  const [practiceCompareRunIndex, setPracticeCompareRunIndex] = useState(0);
+  useEffect(() => {
+    setPGroup(0);
+    setPracticePrimaryRunIndex(0);
+    setPracticeCompareRunIndex(0);
+    setPracticeCompareDriver("");
+  }, [session?.id, practHistSessionId]);
   const [cDrivers, setCDrivers] = useState(new Set(["Brad Keselowski"]));
   const [fieldSort, setFieldSort] = useState("pos");
   const [compMode, setCompMode] = useState("last");
@@ -631,11 +857,11 @@ export default function App() {
   };
 
   return (
-    <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", maxWidth: 480, margin: "0 auto", overflowX: "hidden" }}>
+    <div style={{ background: bg, minHeight: "100vh", color: fg, fontFamily: "'SF Pro Display',-apple-system,sans-serif", width: "100%", maxWidth: 1100, margin: "0 auto", overflowX: "hidden", boxSizing: "border-box" }}>
       {/* HEADER — title row only; no mode buttons to prevent horizontal overflow */}
       <div style={{ padding: "calc(10px + env(safe-area-inset-top, 0px)) 14px 10px 14px", display: "flex", justifyContent: "space-between", alignItems: "center", minHeight: HH, boxSizing: "border-box", background: bg, position: "sticky", top: 0, zIndex: 10 }}>
         <div style={{ flex: 1, minWidth: 0, overflow: "hidden" }}>
-          <div style={{ fontSize: 16, fontWeight: 800, letterSpacing: "0.5px" }}>DRIVER COCKPIT</div>
+          <div style={{ fontSize: 16, fontWeight: 900, letterSpacing: "1px" }}>RACE ENGINEERING</div>
           <div style={{ fontSize: 10, color: sub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
             {session?.track_name?.toUpperCase() || "—"}
             {session?.current_lap != null && session?.laps_in_race != null && session.laps_in_race > 0 && (
@@ -656,14 +882,19 @@ export default function App() {
             {status === 'no_session' && NAMES.length > 0 && (
               <span style={{ marginLeft: 6, color: sub }}>· REPLAY</span>
             )}
+            {session?.last_poll_at && (() => {
+              const age = Math.max(0, Math.round((Date.now() - new Date(session.last_poll_at).getTime()) / 1000));
+              const stale = age > 90;
+              return <span style={{ marginLeft: 6, color: stale ? "#ef4444" : sub }}>· UPDATED {age}s AGO</span>;
+            })()}
           </div>
         </div>
         <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-          {["Race", "Practice", "History"].map((m) => (
-            <button key={m} onClick={() => setMode(m.toLowerCase())} style={{ minWidth: 52, height: 40, padding: "0 10px", borderRadius: 6, background: mode === m.toLowerCase() ? acc : "transparent", color: mode === m.toLowerCase() ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 12, fontWeight: 600, cursor: "pointer" }}>{m}</button>
-          ))}
+          <select value={primaryResolved} onChange={(e) => setPrimary(e.target.value)} aria-label="Selected driver" style={{ maxWidth: 138, height: 38, padding: "0 7px", borderRadius: 6, background: card, color: fg, border: `1px solid ${bdr}`, fontSize: 10, fontWeight: 700 }}>
+            {NAMES.map((name) => <option key={name} value={name}>#{NUM[name] || "?"} {sn(name)}</option>)}
+          </select>
           <SessionControl session={session} dark={dark} onAfterAction={live.reload} compact />
-          <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 40, height: 40, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
+          <button onClick={() => setShowSettings(!showSettings)} aria-label="Settings" style={{ width: 38, height: 38, borderRadius: 6, background: showSettings ? acc : "transparent", border: `1px solid ${bdr}`, color: showSettings ? "#fff" : fg, cursor: "pointer", fontSize: 16 }}>⚙</button>
         </div>
       </div>
 
@@ -712,12 +943,13 @@ export default function App() {
       {mode === "race" && session?.session_type !== 'practice1' && session?.session_type !== 'practice2' && (
         <>
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
-            {["Cockpit", "Full Field", "Chart", "Performance"].map((t, i) => (
-              <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "10px", background: "transparent", color: tab === i ? acc : sub, border: "none", borderBottom: tab === i ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
+            {["Race Command", "Timing Tower", "Lap Chart", "Driver Engineering", "Strategy"].map((t, i) => (
+              <button key={i} onClick={() => setTab(i)} style={{ flex: 1, padding: "10px", background: "transparent", color: tab === i ? acc : sub, border: "none", borderBottom: tab === i ? `2px solid ${acc}` : "2px solid transparent", fontSize: 10, fontWeight: 700, cursor: "pointer", height: TH }}>{t}</button>
             ))}
           </div>
 
-          {tab === 0 && (
+          {tab === 0 && <RaceCommandCockpit session={session} NAMES={NAMES} NUM={NUM} SIM_POS={SIM_POS} TIMING={TIMING} LAST_LAP_TIME={LAST_LAP_TIME} BEST={BEST} EOR={EOR} STINT={STINT} primary={primaryResolved} onSelectDriver={setPrimary} dark={dark} status={status} />}
+          {tab === 0 && false && (
             <div style={{ padding: "0 10px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", marginBottom: 6 }}>
                 <div style={{ display: "flex", gap: 0, borderRadius: 5, overflow: "hidden", border: `1px solid ${bdr}` }}>
@@ -894,6 +1126,102 @@ export default function App() {
         </>
       )}
 
+          {mode === "race" && tab === 4 && (() => {
+            const selectedTiming = TIMING[primaryResolved] || {};
+            const driverStops = PIT_STOPS[primaryResolved] || [];
+            const lastStop = driverStops[driverStops.length - 1] || null;
+            const currentLap = Number(selectedTiming.laps_completed ?? session?.current_lap ?? 0) || null;
+            const lapsSinceStop = lastStop && currentLap != null ? Math.max(0, currentLap - Number(lastStop.lap_number)) : null;
+            const currentRun = RUN_ANALYSIS?.[primaryResolved]?.runs?.slice(-1)[0] || null;
+            const fieldPitCycle = NAMES.map((name) => {
+              const stops = PIT_STOPS[name] || [];
+              const stop = stops[stops.length - 1] || null;
+              const timing = TIMING[name] || {};
+              return {
+                name,
+                position: SIM_POS[name] || 99,
+                lastPitLap: stop ? Number(stop.lap_number) : null,
+                lapsSincePit: stop && Number(timing.laps_completed) ? Number(timing.laps_completed) - Number(stop.lap_number) : null,
+                stop,
+              };
+            }).sort((a, b) => (b.lastPitLap ?? -1) - (a.lastPitLap ?? -1));
+            const stopDetails = lastStop?.details || {};
+            const changedTires = getPitStopTireCount(stopDetails);
+            const panel = (title, body) => <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 10, padding: 12, marginBottom: 10 }}><div style={{ fontSize: 10, fontWeight: 800, letterSpacing: 0.6, marginBottom: 8 }}>{title}</div>{body}</div>;
+            return (
+              <div style={{ padding: "12px 10px 24px", maxWidth: 900, margin: "0 auto" }}>
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 15, fontWeight: 900 }}>RACE STRATEGY & PIT CYCLE</div>
+                  <div style={{ fontSize: 10, color: sub }}>Race context and observed pit activity — not a fuel or tire sensor</div>
+                </div>
+                {panel("RACE SITUATION", <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 7 }}>
+                  {[
+                    ["LAP", currentLap == null ? "—" : currentLap + (session?.laps_in_race ? " / " + session.laps_in_race : "")],
+                    ["STAGE", session?.stage ?? "—"],
+                    ["LAPS TO GO", session?.laps_to_go ?? "—"],
+                  ].map(([label,value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 8 }}>
+                    <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                    <div style={{ fontSize: 16, fontWeight: 800, ...MF }}>{value}</div>
+                  </div>)}
+                </div>)}
+                {panel("SELECTED DRIVER · PIT STOP", lastStop ? (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 7 }}>
+                      {[
+                        ["LAST STOP", "Lap " + lastStop.lap_number],
+                        ["PIT ROAD", pitRoadDuration(stopDetails) != null ? pitRoadDuration(stopDetails).toFixed(2) + "s" : "—"],
+                        ["BOX TIME", stopDetails.pit_stop_duration != null ? Number(stopDetails.pit_stop_duration).toFixed(2) + "s" : "—"],
+                        ["TIRES", changedTires != null ? changedTires + " changed" : stopDetails.pit_stop_type || "Unknown"],
+                        ["STINT AGE", lapsSinceStop == null ? "—" : lapsSinceStop + " laps"],
+                        ["POSITION Δ", stopDetails.positions_gained ?? stopDetails.positions_gained_lossed ?? "—"],
+                      ].map(([label,value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 8 }}>
+                        <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                        <div style={{ fontSize: 13, fontWeight: 800, ...MF }}>{value}</div>
+                      </div>)}
+                    </div>
+                    <div style={{ fontSize: 8, color: sub, marginTop: 7 }}>Tire count and pit-stop timing reflect the public feed record. A missing field means NASCAR did not supply that value to this app.</div>
+                  </>
+                ) : <div style={{ fontSize: 10, color: sub }}>No pit-stop event has been recorded for this driver in the current session.</div>)}
+                {panel("CURRENT RUN PACE", currentRun?.summary ? (
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 7 }}>
+                    {[
+                      ["RUN LAPS", currentRun.laps.length],
+                      ["AVG LAP", currentRun.summary.average.toFixed(3)],
+                      ["TREND", currentRun.summary.trendSecondsPerLap == null ? "—" : (currentRun.summary.trendSecondsPerLap > 0 ? "+" : "") + currentRun.summary.trendSecondsPerLap.toFixed(3) + "s/lap"],
+                    ].map(([label,value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 8 }}>
+                      <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                      <div style={{ fontSize: 13, fontWeight: 800, ...MF }}>{value}</div>
+                    </div>)}
+                  </div>
+                ) : <div style={{ fontSize: 10, color: sub }}>Insufficient clean lap data for a current-run summary.</div>)}
+                {panel("FIELD PIT CYCLE", (
+                  <div style={{ overflowX: "auto" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 10, ...MF }}>
+                      <thead><tr style={{ color: sub, textAlign: "right" }}>
+                        <th style={{ textAlign: "left", padding: "6px 4px" }}>DRIVER</th>
+                        <th style={{ padding: "6px 4px" }}>POS</th>
+                        <th style={{ padding: "6px 4px" }}>LAST PIT</th>
+                        <th style={{ padding: "6px 4px" }}>STINT</th>
+                        <th style={{ padding: "6px 4px" }}>PIT ROAD</th>
+                      </tr></thead>
+                      <tbody>{fieldPitCycle.map((row) => (
+                        <tr key={row.name} style={{ borderTop: `1px solid ${bdr}`, textAlign: "right", background: row.name === primaryResolved ? (dark ? "#ffffff0a" : "#eff6ff") : "transparent" }}>
+                          <td style={{ textAlign: "left", padding: "7px 4px", fontWeight: row.name === primaryResolved ? 800 : 500 }}>#{NUM[row.name] || "?"} {sn(row.name)}</td>
+                          <td style={{ padding: "7px 4px" }}>{row.position}</td>
+                          <td style={{ padding: "7px 4px" }}>{row.lastPitLap == null ? "—" : "L" + row.lastPitLap}</td>
+                          <td style={{ padding: "7px 4px" }}>{row.lapsSincePit == null ? "—" : row.lapsSincePit + "L"}</td>
+                          <td style={{ padding: "7px 4px" }}>{pitRoadDuration(row.stop?.details) != null ? pitRoadDuration(row.stop.details).toFixed(1) + "s" : "—"}</td>
+                        </tr>
+                      ))}</tbody>
+                    </table>
+                  </div>
+                ))}
+                {panel("WHAT THIS APP CANNOT CONFIRM", <div style={{ fontSize: 10, color: sub, lineHeight: 1.55 }}>
+                  We do not have actual fuel remaining, fuel burn per lap, tire pressure, tire temperature, compound/set identification, or private team radio. The app can compare observed pit cycles and pace, but it will not issue a false "pit now" recommendation without those inputs.
+                </div>)}
+              </div>
+            );
+          })()}
           {mode === "race" && tab === 3 && (() => {
             const validDrivers = NAMES.filter((n) => EOR[n]?.t10 != null);
             const ranked = [...validDrivers].sort((a, b) => EOR[a].t10 - EOR[b].t10);
@@ -911,6 +1239,21 @@ export default function App() {
             const priorAvg = avg(prior5);
             const trend = recentAvg != null && priorAvg != null ? recentAvg - priorAvg : null;
             const medianDelta = me.t10 != null && paceMedian != null ? me.t10 - paceMedian : null;
+            const selectedTiming = TIMING[primaryResolved] || {};
+            const selectedPitStops = PIT_STOPS[primaryResolved] || [];
+            const latestPit = selectedPitStops[selectedPitStops.length - 1] || null;
+            const driverRuns = RUN_ANALYSIS[primaryResolved]?.runs || [];
+            const latestRun = driverRuns[driverRuns.length - 1] || null;
+            const latestRunSummary = latestRun?.summary || null;
+            const runBasisLabel = latestRun?.tireAgeBasis === "official-pit-event"
+              ? "Run boundary supported by official pit event"
+              : latestRun?.tireAgeBasis === "mixed-pit-events-and-inference"
+                ? "Mixed official pit events and inferred boundaries"
+                : "Run boundaries inferred from lap data";
+            const leaderTiming = TIMING[NAMES.find((n) => SIM_POS[n] === 1)] || null;
+            const officialLeaderGap = formatOfficialLeaderGap(selectedTiming, leaderTiming)?.label || null;
+            const battleDriver = compDrivers.find((name) => name !== primaryResolved) || "";
+            const lapBattle = battleDriver ? compareLapByLap(LAPS[primaryResolved] || [], LAPS[battleDriver] || []) : null;
             const metricCard = (label, value, detail) => (
               <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, minWidth: 0 }}>
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, letterSpacing: 0.7 }}>{label}</div>
@@ -936,24 +1279,55 @@ export default function App() {
                   {metricCard("10-LAP PACE RANK", paceRank ? "#" + paceRank + " / " + ranked.length : "—", "Among drivers with a valid 10-lap run")}
                   {metricCard("10-LAP VS FIELD MEDIAN", deltaText(medianDelta), "Negative = faster than field median")}
                   {metricCard("LAST 5 VS PRIOR 5", deltaText(trend), trend == null ? "Requires 10 consecutive clean laps" : trend < 0 ? "Pace improving" : trend > 0 ? "Pace slowing" : "No change")}
+                  {metricCard("TIME TO LEADER", officialLeaderGap || "—", "Elapsed-time gap plus lap deficit when lapped")}
+                  {metricCard("LAST PIT STOP", latestPit ? "Lap " + latestPit.lap_number : "—", pitRoadDuration(latestPit?.details) != null ? pitRoadDuration(latestPit.details).toFixed(1) + "s pit road" : "Pit duration unavailable")}
+                </div>
+                <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800 }}>LATEST RUN ANALYSIS</div>
+                    <div style={{ fontSize: 9, color: sub }}>{latestRun ? `L${latestRun.startLap}–L${latestRun.endLap}` : "No run data"}</div>
+                  </div>
+                  {latestRunSummary ? (
+                    <>
+                      <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
+                        {metricCard("RUN LAPS", String(latestRunSummary.lapCount), "Valid timed laps in latest segment")}
+                        {metricCard("RUN AVG", ft(latestRunSummary.average), "Mean lap time")}
+                        {metricCard("RUN BEST", ft(latestRunSummary.best), "Fastest valid lap")}
+                        {metricCard("LAP-TIME VARIABILITY", latestRunSummary.standardDeviation == null ? "—" : latestRunSummary.standardDeviation.toFixed(3) + "s", "Standard deviation; lower is more consistent")}
+                        {metricCard("FIRST 5 → LAST 5", latestRunSummary.firstToLastFiveDelta == null ? "—" : (latestRunSummary.firstToLastFiveDelta > 0 ? "+" : "") + latestRunSummary.firstToLastFiveDelta.toFixed(3) + "s", "Positive = slower over the run")}
+                        {metricCard("PACE TREND", latestRunSummary.trendSecondsPerLap == null ? "—" : (latestRunSummary.trendSecondsPerLap > 0 ? "+" : "") + latestRunSummary.trendSecondsPerLap.toFixed(3) + "s/lap", "Linear trend; positive = slowing")}
+                      </div>
+                      <div style={{ fontSize: 9, color: sub, lineHeight: 1.5, marginTop: 8 }}>{runBasisLabel}. This is a lap-time segment, not verified tire age; track evolution, traffic, weather, and setup changes can also affect the trend.</div>
+                    </>
+                  ) : <div style={{ fontSize: 10, color: sub }}>Not enough valid lap history to summarize a run.</div>}
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
                   <div style={{ fontSize: 10, fontWeight: 800, marginBottom: 8 }}>POSITION BATTLE</div>
                   {[{label:"CAR AHEAD",name:aheadName},{label:"CAR BEHIND",name:behindName}].map((item) => {
                     const timing = item.name ? compareRaceLaps(LAPS[primaryResolved] || [], LAPS[item.name] || []) : null;
+                    const official = item.name ? compareOfficialTiming(TIMING[primaryResolved], TIMING[item.name]) : null;
                     const pace = timing?.paceDelta5;
+                    const gapLabel = official?.gapSeconds != null
+                      ? Math.abs(official.gapSeconds).toFixed(2) + "s feed Δ"
+                      : official?.lapDelta
+                        ? Math.abs(official.lapDelta) + " lap" + (Math.abs(official.lapDelta) === 1 ? "" : "s")
+                        : timing?.lapDelta
+                          ? Math.abs(timing.lapDelta) + " lap" + (Math.abs(timing.lapDelta) === 1 ? "" : "s")
+                          : timing?.gapSeconds != null
+                            ? Math.abs(timing.gapSeconds).toFixed(2) + "s calc."
+                            : "Gap n/a";
                     return <div key={item.label} style={{ display:"flex", justifyContent:"space-between", alignItems:"center", padding:"9px 0", borderTop:`1px solid ${bdr}`, gap:8 }}>
                       <div style={{minWidth:0}}>
                         <div style={{fontSize:9,color:sub,fontWeight:700}}>{item.label}</div>
                         <div style={{fontSize:12,fontWeight:700,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.name ? "#" + (NUM[item.name] || "?") + " " + item.name : "No car in this position"}</div>
                       </div>
                       <div style={{textAlign:"right",flexShrink:0}}>
-                        <div style={{fontSize:12,fontWeight:800,...MF}}>{timing?.lapDelta ? Math.abs(timing.lapDelta) + " lap" + (Math.abs(timing.lapDelta)===1?"":"s") : timing?.gapSeconds != null ? Math.abs(timing.gapSeconds).toFixed(2)+"s calc." : "Gap n/a"}</div>
+                        <div style={{fontSize:12,fontWeight:800,...MF}}>{gapLabel}</div>
                         <div style={{fontSize:10,color:deltaColor(pace),...MF}}>{pace == null ? "5L pace unavailable" : (pace > 0 ? "+" : "") + pace.toFixed(3) + "s/lap vs them"}</div>
                       </div>
                     </div>;
                   })}
-                  <div style={{fontSize:9,color:sub,marginTop:7}}>Calculated from public lap history; not official NASCAR interval timing.</div>
+                  <div style={{fontSize:9,color:sub,marginTop:7}}>Uses NASCAR live-feed leader deltas when both cars are on the same lap. Falls back to calculated lap-history estimates when official interval data is unavailable.</div>
                 </div>
                 <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
                   <div style={{fontSize:10,fontWeight:800,marginBottom:8}}>SELECTED HEAD-TO-HEAD</div>
@@ -964,6 +1338,37 @@ export default function App() {
                       <span style={{fontSize:11,...MF,color:deltaColor(t.paceDelta5)}}>{t.paceDelta5==null?"—":deltaText(t.paceDelta5)+"/lap"}</span>
                     </div>;
                   }) : <div style={{fontSize:11,color:sub}}>Select comparison drivers from the Cockpit or Full Field view to populate this section.</div>}
+                </div>
+                <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 9, padding: 12, marginTop: 10 }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 7 }}>
+                    <div style={{ fontSize: 10, fontWeight: 800 }}>LAP-BY-LAP COMPARISON</div>
+                    <div style={{ fontSize: 9, color: sub }}>{battleDriver ? "vs " + battleDriver : "Select a comparison driver"}</div>
+                  </div>
+                  {lapBattle?.rows?.length ? (
+                    <div style={{ overflowX: "auto" }}>
+                      <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 9, ...MF }}>
+                        <thead><tr style={{ color: sub, textAlign: "right" }}>
+                          <th style={{ textAlign: "left", padding: "5px 3px" }}>LAP</th>
+                          <th style={{ padding: "5px 3px" }}>YOU</th>
+                          <th style={{ padding: "5px 3px" }}>THEM</th>
+                          <th style={{ padding: "5px 3px" }}>DELTA</th>
+                          <th style={{ padding: "5px 3px" }}>RUNNING Δ</th>
+                        </tr></thead>
+                        <tbody>
+                          {lapBattle.rows.slice(-10).map((row) => (
+                            <tr key={row.lap} style={{ borderTop: `1px solid ${bdr}`, textAlign: "right" }}>
+                              <td style={{ textAlign: "left", padding: "6px 3px", color: sub }}>L{row.lap}</td>
+                              <td style={{ padding: "6px 3px" }}>{row.primaryTime.toFixed(3)}</td>
+                              <td style={{ padding: "6px 3px" }}>{row.competitorTime.toFixed(3)}</td>
+                              <td style={{ padding: "6px 3px", color: deltaColor(row.lapDeltaSeconds) }}>{row.lapDeltaSeconds > 0 ? "+" : ""}{row.lapDeltaSeconds.toFixed(3)}</td>
+                              <td style={{ padding: "6px 3px", color: deltaColor(row.cumulativeDeltaSeconds) }}>{row.cumulativeDeltaSeconds > 0 ? "+" : ""}{row.cumulativeDeltaSeconds.toFixed(3)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : <div style={{ fontSize: 10, color: sub }}>No matched lap history for the selected comparison.</div>}
+                  <div style={{ fontSize: 8, color: sub, marginTop: 6 }}>Negative delta means the selected driver was faster on that lap. Running Δ is the sum of lap-time differences over the displayed common-lap history; it is not the official on-track interval.</div>
                 </div>
                 <div style={{fontSize:9,color:sub,lineHeight:1.5,marginTop:10}}>
                   Method: pace rank and field median use each driver's current-stint 10-lap average. Last-5 trend compares the latest five clean laps with the five immediately before them. Pit and detected caution laps are excluded. These are descriptive indicators, not a tire-wear or finishing-position prediction model.
@@ -982,7 +1387,48 @@ export default function App() {
         const pN = usingPH ? practHist.NUM : NUM;
         const pNA = usingPH ? practHist.NAMES : NAMES;
         const pC = usingPH ? practHist.CLR : CLR;
+        const pRUN = usingPH ? practHist.RUN_ANALYSIS : RUN_ANALYSIS;
         const pPri = pNA.includes(primaryResolved) ? primaryResolved : (pNA[0] || primaryResolved);
+
+        // Practice rankings must cover the whole session, not only the latest stint.
+        // End-of-run pace is taken from each driver's longest clean run.
+        const practiceWindows = [5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100];
+        const practiceBest = {};
+        const practiceEnd = {};
+        for (const name of pNA) {
+          const runs = pRUN?.[name]?.runs || [];
+          const best = { ...(pB[name] || {}) };
+          const end = { ...(pE[name] || {}) };
+          const longestRun = [...runs].sort((a, b) => b.laps.length - a.laps.length)[0] || null;
+          for (const windowSize of practiceWindows) {
+            let bestAverage = Infinity;
+            for (const run of runs) {
+              const times = run.laps.map((lap) => Number(lap.time)).filter((time) => Number.isFinite(time) && time > 0);
+              for (let i = 0; i <= times.length - windowSize; i++) {
+                const average = times.slice(i, i + windowSize).reduce((sum, time) => sum + time, 0) / windowSize;
+                if (average < bestAverage) bestAverage = average;
+              }
+            }
+            best[`t${windowSize}`] = bestAverage === Infinity ? null : bestAverage;
+            const longestTimes = longestRun ? longestRun.laps.map((lap) => Number(lap.time)) : [];
+            const finalWindow = longestTimes.slice(-windowSize);
+            end[`t${windowSize}`] = finalWindow.length === windowSize
+              ? finalWindow.reduce((sum, time) => sum + time, 0) / windowSize
+              : null;
+          }
+          practiceBest[name] = best;
+          practiceEnd[name] = end;
+        }
+        const primaryRuns = pRUN?.[pPri]?.runs || [];
+        const compareCandidates = pNA.filter((name) => name !== pPri && (pRUN?.[name]?.runs || []).length > 0);
+        const compareName = compareCandidates.includes(practiceCompareDriver)
+          ? practiceCompareDriver
+          : (compDrivers.find((name) => compareCandidates.includes(name)) || compareCandidates[0] || "");
+        const compareRuns = compareName ? (pRUN?.[compareName]?.runs || []) : [];
+        const primaryRun = primaryRuns[practicePrimaryRunIndex] || primaryRuns[primaryRuns.length - 1] || null;
+        const compareRun = compareRuns[practiceCompareRunIndex] || compareRuns[compareRuns.length - 1] || null;
+        const runComparison = primaryRun && compareRun ? compareRunsByTireAge(primaryRun, compareRun) : null;
+        const primaryRunSummary = primaryRun?.summary || summarizeRun(primaryRun);
         const pSess = usingPH ? practHist.session : session;
 
         // Chart data computed from the active practice source (historical or live)
@@ -1029,8 +1475,8 @@ export default function App() {
           <div style={{ padding: "6px 12px", display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: `1px solid ${bdr}`, background: usingPH ? (dark ? "#0d0d2a" : "#eef2ff") : bg }}>
             <div style={{ fontSize: 10, color: usingPH ? acc : sub }}>
               {usingPH
-                ? `${pSess?.track_name || ""} · ${pSess?.session_type?.toUpperCase() || ""} · ${pSess?.session_date || ""}`
-                : session?.track_name ? `LIVE · ${session.track_name}` : "No live session"}
+                ? `${pSess?.is_active ? "LIVE" : "FINAL"} · ${pSess?.track_name || ""} · ${pSess?.session_type?.toUpperCase() || ""} · ${pSess?.session_date || ""}`
+                : session?.track_name ? `${session?.is_active ? "LIVE" : "FINAL"} · ${session.track_name}` : "No practice session"}
             </div>
             <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
               {usingPH && (
@@ -1058,13 +1504,82 @@ export default function App() {
           )}
 
           <div style={{ display: "flex", borderBottom: `1px solid ${bdr}`, position: "sticky", top: HH + MTH, background: bg, zIndex: 9 }}>
-            {["Dashboard", "Chart"].map((t) => (
-              <button key={t} onClick={() => setPView(t.toLowerCase().replace(" ", ""))} style={{ flex: 1, padding: "10px", background: "transparent", color: pView === t.toLowerCase().replace(" ", "") ? acc : sub, border: "none", borderBottom: pView === t.toLowerCase().replace(" ", "") ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
+            {["Dashboard", "Lap by Lap", "Chart"].map((t) => (
+              <button key={t} onClick={() => setPView(t.toLowerCase().replaceAll(" ", ""))} style={{ flex: 1, padding: "10px", background: "transparent", color: pView === t.toLowerCase().replaceAll(" ", "") ? acc : sub, border: "none", borderBottom: pView === t.toLowerCase().replaceAll(" ", "") ? `2px solid ${acc}` : "2px solid transparent", fontSize: 13, fontWeight: 600, cursor: "pointer", height: TH }}>{t}</button>
             ))}
           </div>
 
           {pView === "dashboard" && (
             <div style={{ padding: "0 12px" }}>
+              <div style={{ background: card, border: `1px solid ${bdr}`, borderRadius: 10, padding: 12, marginTop: 10, marginBottom: 12 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontSize: 11, fontWeight: 800, letterSpacing: 0.6 }}>RUN & TIRE-AGE ANALYSIS</div>
+                    <div style={{ fontSize: 9, color: sub, marginTop: 2 }}>Compare pace at similar run ages, not just session-best laps</div>
+                  </div>
+                  <span style={{ fontSize: 8, color: pRUN?.[pPri]?.hasVerifiedTireChanges ? "#22c55e" : "#eab308", fontWeight: 700 }}>
+                    {pRUN?.[pPri]?.hasVerifiedTireChanges ? "PIT DATA" : "RUN AGE EST."}
+                  </span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                  <label style={{ fontSize: 9, color: sub }}>Selected driver run
+                    <select value={String(practicePrimaryRunIndex)} onChange={(e) => setPracticePrimaryRunIndex(Number(e.target.value))} style={{ display: "block", width: "100%", marginTop: 3, padding: 7, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 5, fontSize: 10 }}>
+                      {primaryRuns.map((run, index) => <option key={run.runNumber} value={index}>Run {run.runNumber} · L{run.startLap}–{run.endLap} · {run.laps.length}L</option>)}
+                    </select>
+                  </label>
+                  <label style={{ fontSize: 9, color: sub }}>Compare driver
+                    <select value={compareName} onChange={(e) => { setPracticeCompareDriver(e.target.value); setPracticeCompareRunIndex(0); }} style={{ display: "block", width: "100%", marginTop: 3, padding: 7, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 5, fontSize: 10 }}>
+                      {compareCandidates.map((name) => <option key={name} value={name}>#{pN[name] || "?"} {name}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {compareRuns.length > 1 && (
+                  <label style={{ display: "block", fontSize: 9, color: sub, marginBottom: 8 }}>Comparison run
+                    <select value={String(practiceCompareRunIndex)} onChange={(e) => setPracticeCompareRunIndex(Number(e.target.value))} style={{ display: "block", width: "100%", marginTop: 3, padding: 7, background: bg, color: fg, border: `1px solid ${bdr}`, borderRadius: 5, fontSize: 10 }}>
+                      {compareRuns.map((run, index) => <option key={run.runNumber} value={index}>Run {run.runNumber} · L{run.startLap}–{run.endLap} · {run.laps.length}L</option>)}
+                    </select>
+                  </label>
+                )}
+                {primaryRun && primaryRunSummary ? (
+                  <>
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 5, marginBottom: 8 }}>
+                      {[
+                        ["AVG LAP", primaryRunSummary.average.toFixed(3)],
+                        ["MEDIAN", primaryRunSummary.median.toFixed(3)],
+                        ["CONSISTENCY", primaryRunSummary.standardDeviation.toFixed(3) + "σ"],
+                      ].map(([label, value]) => <div key={label} style={{ background: dark ? "#ffffff08" : "#00000006", borderRadius: 6, padding: 7 }}>
+                        <div style={{ fontSize: 8, color: sub, fontWeight: 700 }}>{label}</div>
+                        <div style={{ fontSize: 13, color: fg, fontWeight: 800, ...MF }}>{value}</div>
+                      </div>)}
+                    </div>
+                    <div style={{ fontSize: 9, color: sub, marginBottom: 6 }}>
+                      {pPri} Run {primaryRun.runNumber}: {primaryRun.laps.length} clean laps · L{primaryRun.startLap}–{primaryRun.endLap} ·
+                      {" "}{primaryRun.tireAgeConfidence === "higher" ? "tire change recorded" : "run age inferred"}
+                      {primaryRunSummary.firstToLastFiveDelta != null ? ` · first 5 to last 5: ${primaryRunSummary.firstToLastFiveDelta > 0 ? "+" : ""}${primaryRunSummary.firstToLastFiveDelta.toFixed(3)}s` : ""}
+                    </div>
+                    {runComparison && (
+                      <div style={{ borderTop: `1px solid ${bdr}`, paddingTop: 7 }}>
+                        <div style={{ fontSize: 9, fontWeight: 800, marginBottom: 5 }}>AVERAGE LAP DELTA BY TIRE AGE</div>
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(5,minmax(0,1fr))", gap: 3 }}>
+                          {runComparison.comparisons.map((item) => (
+                            <div key={item.startAge} style={{ textAlign: "center", background: dark ? "#ffffff08" : "#00000006", borderRadius: 5, padding: 5 }}>
+                              <div style={{ fontSize: 7, color: sub }}>{item.startAge}–{item.endAge}L</div>
+                              <div style={{ fontSize: 10, fontWeight: 800, color: item.deltaSecondsPerLap == null ? sub : item.deltaSecondsPerLap < 0 ? "#22c55e" : item.deltaSecondsPerLap > 0 ? "#ef4444" : fg, ...MF }}>
+                                {item.deltaSecondsPerLap == null ? "—" : (item.deltaSecondsPerLap > 0 ? "+" : "") + item.deltaSecondsPerLap.toFixed(3)}
+                              </div>
+                              <div style={{ fontSize: 7, color: sub }}>{item.matchedLaps}/{item.endAge - item.startAge + 1}</div>
+                            </div>
+                          ))}
+                        </div>
+                        <div style={{ fontSize: 8, color: sub, marginTop: 5 }}>Delta = selected driver minus comparison driver. Negative means the selected driver was faster. Each window requires at least 80% matched laps.</div>
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <div style={{ fontSize: 10, color: sub }}>Not enough clean lap data to form a comparable run yet.</div>
+                )}
+                <div style={{ fontSize: 8, color: sub, marginTop: 7 }}>Tire age is confirmed only when NASCAR pit-stop data identifies a stop. Otherwise run boundaries are inferred from lap-time outliers or missing laps; inferred run age is not proof of a tire change.</div>
+              </div>
               <div style={{ display: "flex", gap: 6, marginTop: 10, justifyContent: "center", marginBottom: 10, alignItems: "center", flexWrap: "wrap" }}>
                 {[{ l: "All", v: 0 }, ...[1, 2].filter((group) => pNA.some((n) => pG[n] === group)).map((group) => ({ l: "Group " + group, v: group }))].map((g) => (
                   <button key={g.v} onClick={() => setPGroup(g.v)} style={{ padding: "6px 16px", borderRadius: 4, background: pGroup === g.v ? acc : "transparent", color: pGroup === g.v ? "#fff" : fg, border: `1px solid ${bdr}`, fontSize: 11, fontWeight: 600, cursor: "pointer" }}>{g.l}</button>
@@ -1087,35 +1602,37 @@ export default function App() {
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>BEST WINDOW</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 10 }}>
                   {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => (
-                    <StatCell key={k} label={k.replace("t", "") + "L"} value={pB[pPri]?.[k]} rk={rank(pB, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
+                    <StatCell key={k} label={k.replace("t", "") + "L"} value={practiceBest[pPri]?.[k]} rk={rank(practiceBest, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
                   ))}
                 </div>
                 <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>END OF RUN (worn tires)</div>
                 <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
                   {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => (
-                    <StatCell key={k + "e"} label={k.replace("t", "") + "L"} value={pE[pPri]?.[k]} rk={rank(pE, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
+                    <StatCell key={k + "e"} label={k.replace("t", "") + "L"} value={practiceEnd[pPri]?.[k]} rk={rank(practiceEnd, k, pPri, pNA.filter((n) => pGroup === 0 || pG[n] === pGroup))} dark={dark} />
                   ))}
                 </div>
               </div>
 
               <div style={{ marginTop: 16 }}>
-                <RankTable title="BEST WINDOW RANKINGS" dataset={pB} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} defaultSort="best" />
+                <RankTable title="BEST WINDOW RANKINGS" dataset={practiceBest} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} defaultSort="best" />
               </div>
 
-              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={pE} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} showRunLength defaultSort="best" />
+              <RankTable title="WORN TIRE SPEED (End of Longest Run)" dataset={practiceEnd} primary={pPri} group={pGroup} compDrivers={compDrivers} dark={dark} onSetPrimary={setPrimary} onToggleComp={toggleComp} extraW={extraWindow} NAMES={pNA} GROUPS={pG} NUM={pN} BEST={pB} showRunLength defaultSort="best" />
 
-              <FalloffCard primary={pPri} compDrivers={compDrivers} dark={dark} BEST={pB} EOR={pE} NUM={pN} />
+              <FalloffCard primary={pPri} compDrivers={compDrivers} dark={dark} BEST={practiceBest} EOR={practiceEnd} NUM={pN} />
 
               {compDrivers.filter((n) => n !== pPri).length > 0 && (
                 <div>
                   <div style={{ fontSize: 10, color: sub, fontWeight: 700, letterSpacing: 1, marginBottom: 6 }}>HEAD TO HEAD</div>
                   {compDrivers.filter((n) => n !== pPri).map((n) => (
-                    <PracticeCompCard key={n} name={n} primary={pPri} dark={dark} BEST={pB} EOR={pE} NUM={pN} GROUPS={pG} extraWindow={extraWindow} />
+                    <PracticeCompCard key={n} name={n} primary={pPri} dark={dark} BEST={practiceBest} EOR={practiceEnd} NUM={pN} GROUPS={pG} extraWindow={extraWindow} />
                   ))}
                 </div>
               )}
             </div>
           )}
+
+          {pView === "lapbylap" && <><div style={{padding:"8px 12px",fontSize:11,color:sub}}>Matrix source: {usingPH ? "archived practice" : "current session"} · {pNA.length} drivers · {Object.values(pL || {}).reduce((sum,rows)=>sum+(Array.isArray(rows)?rows.length:0),0)} lap records</div><PracticeMatrixErrorBoundary><PracticeLapMatrix lapsByDriver={pL} names={pNA} numbers={pN} selectedDriver={pPri} dark={dark} accent={acc} runAnalysis={pRUN} favorites={practiceLapFavorites} onToggleFavorite={(name)=>setPracticeLapFavorites(prev=>prev.includes(name)?prev.filter(x=>x!==name):[...prev,name])} /></PracticeMatrixErrorBoundary></>}
 
           {pView === "chart" && (
             <div style={{ padding: "8px 4px 0" }}>
