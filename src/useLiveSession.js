@@ -66,14 +66,15 @@ function bestSingle(laps) {
 //   (b) a caution lap (field-wide slowdown, passed in via cautionSet)
 // Current stint = all clean laps AFTER the most recent boundary of either type.
 // Operates on raw laps so pit laps are visible as boundaries.
-function currentStint(rawLapsAsc, thr, cautionSet = new Set()) {
+function currentStint(rawLapsAsc, thr, cautionSet = new Set(), explicitPitSet = new Set()) {
   if (!rawLapsAsc.length) return [];
   let lastBoundaryIdx = -1;
   for (let i = 0; i < rawLapsAsc.length; i++) {
     const [lapNum, lapTime] = rawLapsAsc[i];
-    const isPit = lapTime > thr;
+    const isPit = explicitPitSet.has(lapNum) || lapTime > thr;
     const isCaution = cautionSet.has(lapNum);
-    if (isPit || isCaution) lastBoundaryIdx = i;
+    const hasLapGap = i > 0 && lapNum !== rawLapsAsc[i - 1][0] + 1;
+    if (isPit || isCaution || hasLapGap) lastBoundaryIdx = i;
   }
   const afterBoundary = rawLapsAsc.slice(lastBoundaryIdx + 1);
   // Filter out any remaining pit/caution laps (shouldn't happen, but defensive)
@@ -82,18 +83,18 @@ function currentStint(rawLapsAsc, thr, cautionSet = new Set()) {
 
 // Compute BEST/EOR for one driver's laps. Excludes both personal outliers
 // (pit/spin) AND field-wide caution laps. Stint resets on EITHER boundary.
-function computeDriverStats(rawLaps, cautionSet = new Set()) {
+function computeDriverStats(rawLaps, cautionSet = new Set(), explicitPitSet = new Set()) {
   const laps = [...rawLaps].sort((a, b) => a[0] - b[0]);
 
   // Per-driver threshold: best lap + 5s. Works at every track.
-  const bestLap = bestSingle(laps);
+  const bestLap = bestSingle(laps.filter(([n]) => !explicitPitSet.has(n)));
   const thr = driverThreshold(laps, bestLap);
 
-  // For BEST window computation, use full-session clean laps
-  const clean = cleanLaps(laps, thr).filter(([n]) => !cautionSet.has(n));
+  // For BEST window computation, exclude explicit pit laps and field-wide caution laps.
+  const clean = cleanLaps(laps, thr).filter(([n]) => !cautionSet.has(n) && !explicitPitSet.has(n));
 
-  // Current stint uses RAW laps so pit/caution boundaries are visible
-  const stintAsc = currentStint(laps, thr, cautionSet);
+  // Current stint uses RAW laps so explicit pit/caution and lap-gap boundaries are visible.
+  const stintAsc = currentStint(laps, thr, cautionSet, explicitPitSet);
 
   // BEST window (search within current stint only — since session-best is meaningless)
   const best = {};
@@ -202,7 +203,7 @@ export function useLiveSession() {
       while (true) {
         const { data: chunk, error: lErr } = await supabase
           .from('laps')
-          .select('driver_key, lap_number, lap_time')
+          .select('driver_key, lap_number, lap_time, is_pit, is_caution')
           .eq('session_id', activeId)
           .order('lap_number', { ascending: true })
           .range(from, from + PAGE - 1);
@@ -220,6 +221,16 @@ export function useLiveSession() {
         .select('*')
         .eq('session_id', activeId);
       setRawPositions(pos || []);
+
+      // Pit-stop events are persisted by the polling worker; load them for live run analysis.
+      const { data: activePitStops, error: pitErr } = await supabase
+        .from('race_events')
+        .select('driver_key, lap_number, details, recorded_at')
+        .eq('session_id', activeId)
+        .eq('event_type', 'pit_stop')
+        .order('lap_number', { ascending: true });
+      if (pitErr) throw pitErr;
+      setRawPitStops(activePitStops || []);
 
       setStatus('live');
       setError(null);
@@ -266,7 +277,7 @@ export function useLiveSession() {
         while (!cancelled) {
           const { data: chunk } = await supabase
             .from('laps')
-            .select('driver_key, lap_number, lap_time')
+            .select('driver_key, lap_number, lap_time, is_pit, is_caution')
             .eq('session_id', sessId)
             .gt('lap_number', fetchFrom)
             .order('lap_number', { ascending: true })
@@ -278,10 +289,10 @@ export function useLiveSession() {
         }
         if (!cancelled && newLaps.length > 0) {
           setRawLaps((prev) => {
-            // Dedup by (driver_key, lap_number)
-            const seen = new Set(prev.map((r) => `${r.driver_key}:${r.lap_number}`));
-            const toAdd = newLaps.filter((r) => !seen.has(`${r.driver_key}:${r.lap_number}`));
-            return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+            // Merge by (driver_key, lap_number) so corrected timing and pit flags replace stale rows.
+            const merged = new Map(prev.map((r) => [`${r.driver_key}:${r.lap_number}`, r]));
+            for (const row of newLaps) merged.set(`${row.driver_key}:${row.lap_number}`, row);
+            return [...merged.values()].sort((a, b) => a.lap_number - b.lap_number);
           });
         }
 
@@ -291,6 +302,15 @@ export function useLiveSession() {
           .select('*')
           .eq('session_id', sessId);
         if (!cancelled && pos) setRawPositions(pos);
+
+        // Pit events are append-only and the table is small; refresh alongside live timing.
+        const { data: pitStops } = await supabase
+          .from('race_events')
+          .select('driver_key, lap_number, details, recorded_at')
+          .eq('session_id', sessId)
+          .eq('event_type', 'pit_stop')
+          .order('lap_number', { ascending: true });
+        if (!cancelled && pitStops) setRawPitStops(pitStops);
 
         // Re-fetch drivers if missing — happens when START is tapped before
         // poll-nascar's first write (fire-and-forget takes 2-5s).
@@ -432,7 +452,10 @@ function detectCautionLaps(rawLaps) {
       GROUPS[dispName] = normalizePracticeGroup(d.practice_group);
 
       const rawDrv = byDriver[dkey] || [];
-      const stats = computeDriverStats(rawDrv, cautionSet);
+      const explicitPitSet = new Set(rawLaps
+        .filter((row) => row.driver_key === dkey && row.is_pit === true)
+        .map((row) => Number(row.lap_number)));
+      const stats = computeDriverStats(rawDrv, cautionSet, explicitPitSet);
       const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
       RUN_ANALYSIS[dispName] = buildDriverRunAnalysis(
         stats.laps,
