@@ -150,7 +150,7 @@ export function useHistorySession(sessionId) {
         while (!cancelled) {
           const { data: chunk, error: lErr } = await supabase
             .from('laps')
-            .select('driver_key, lap_number, lap_time')
+            .select('driver_key, lap_number, lap_time, is_pit, is_caution, recorded_at')
             .eq('session_id', sessionId)
             .order('lap_number', { ascending: true })
             .range(from, from + PAGE - 1);
@@ -180,12 +180,21 @@ export function useHistorySession(sessionId) {
   }, [sessionId]);
 
   const derived = useMemo(() => {
-    const cautionSet = detectCautionLaps(rawLaps);
-    rawLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
-    const byDriver = {};
+    // Deduplicate poll snapshots: one authoritative record per driver/session lap.
+    // Prefer the most recently recorded snapshot, retaining its flags and corrected time.
+    const uniqueLapRows = new Map();
     for (const row of rawLaps) {
+      const key = String(row.driver_key) + ":" + Number(row.lap_number);
+      const prior = uniqueLapRows.get(key);
+      if (!prior || String(row.recorded_at || "") >= String(prior.recorded_at || "")) uniqueLapRows.set(key, row);
+    }
+    const canonicalLaps = [...uniqueLapRows.values()].sort((a,b)=>Number(a.lap_number)-Number(b.lap_number));
+    const cautionSet = detectCautionLaps(canonicalLaps);
+    canonicalLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
+    const byDriver = {};
+    for (const row of canonicalLaps) {
       if (!byDriver[row.driver_key]) byDriver[row.driver_key] = [];
-      byDriver[row.driver_key].push([row.lap_number, parseFloat(row.lap_time)]);
+      byDriver[row.driver_key].push([Number(row.lap_number), parseFloat(row.lap_time)]);
     }
 
     const BEST = {}, EOR = {}, LAPS = {}, NUM = {}, CLR = {}, GROUPS = {};
@@ -201,7 +210,7 @@ export function useHistorySession(sessionId) {
       const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
       RUN_ANALYSIS[name] = buildDriverRunAnalysis(
         stats.laps,
-        { cautionLaps: [...cautionSet], pitLaps: driverPitStops.filter(isTireChangePitStop).map((stop) => stop.lap_number) }
+        { cautionLaps: [...cautionSet], pitLaps: [...driverPitStops.filter(isTireChangePitStop).map((stop) => stop.lap_number), ...(canonicalLaps.filter(row=>row.driver_key===dkey&&row.is_pit===true).map(row=>row.lap_number))] }
       );
       PIT_STOPS[name] = driverPitStops;
       BEST[name] = stats.best;
