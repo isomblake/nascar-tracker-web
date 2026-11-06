@@ -47,8 +47,10 @@ function bestWindow(laps, n) {
   if (laps.length < n) return null;
   let best = Infinity;
   for (let i = 0; i <= laps.length - n; i++) {
-    const sum = laps.slice(i, i + n).reduce((a, [, t]) => a + t, 0);
-    const avg = sum / n;
+    const window = laps.slice(i, i + n);
+    // Never bridge a missing lap or a removed pit/caution/slow lap.
+    if (window.some((row, j) => j > 0 && Number(row[0]) !== Number(window[j - 1][0]) + 1)) continue;
+    const avg = window.reduce((a, [, t]) => a + t, 0) / n;
     if (avg < best) best = avg;
   }
   return best === Infinity ? null : best;
@@ -414,15 +416,22 @@ function detectCautionLaps(rawLaps) {
 
   // ─── derived data (matches prototype shapes) ──────────────────
   const derived = useMemo(() => {
-    // FIRST: detect field-wide caution laps (done once for whole field)
-    const cautionSet = detectCautionLaps(rawLaps);
-    rawLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
-
-    // Group laps by driver_key
-    const byDriver = {};
+    // Canonicalize poll snapshots: one row per driver/session lap, latest recorded snapshot wins.
+    const uniqueLapRows = new Map();
     for (const row of rawLaps) {
+      const key = String(row.driver_key) + ":" + Number(row.lap_number);
+      const prior = uniqueLapRows.get(key);
+      if (!prior || String(row.recorded_at || "") >= String(prior.recorded_at || "")) uniqueLapRows.set(key, row);
+    }
+    const canonicalLaps = [...uniqueLapRows.values()].sort((a,b)=>Number(a.lap_number)-Number(b.lap_number));
+    // Detect field-wide caution laps only after duplicate snapshots are removed.
+    const cautionSet = detectCautionLaps(canonicalLaps);
+    canonicalLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
+
+    const byDriver = {};
+    for (const row of canonicalLaps) {
       if (!byDriver[row.driver_key]) byDriver[row.driver_key] = [];
-      byDriver[row.driver_key].push([row.lap_number, parseFloat(row.lap_time)]);
+      byDriver[row.driver_key].push([Number(row.lap_number), parseFloat(row.lap_time)]);
     }
 
     const BEST = {};
@@ -453,7 +462,7 @@ function detectCautionLaps(rawLaps) {
       GROUPS[dispName] = normalizePracticeGroup(d.practice_group);
 
       const rawDrv = byDriver[dkey] || [];
-      const explicitPitSet = new Set(rawLaps
+      const explicitPitSet = new Set(canonicalLaps
         .filter((row) => row.driver_key === dkey && row.is_pit === true)
         .map((row) => Number(row.lap_number)));
       const stats = computeDriverStats(rawDrv, cautionSet, explicitPitSet);
