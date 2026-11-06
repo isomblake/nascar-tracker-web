@@ -43,7 +43,10 @@ function bestWindow(laps, n) {
   if (laps.length < n) return null;
   let best = Infinity;
   for (let i = 0; i <= laps.length - n; i++) {
-    const avg = laps.slice(i, i + n).reduce((a, [, t]) => a + t, 0) / n;
+    const window = laps.slice(i, i + n);
+    // A removed pit/caution/slow lap or a missing source lap breaks consecutiveness.
+    if (window.some((row, j) => j > 0 && Number(row[0]) !== Number(window[j - 1][0]) + 1)) continue;
+    const avg = window.reduce((a, [, t]) => a + t, 0) / n;
     if (avg < best) best = avg;
   }
   return best === Infinity ? null : best;
