@@ -243,5 +243,21 @@ export function compareOfficialTiming(primary, competitor) {
       source: "difference-of-official-leader-deltas",
     };
   }
+
+  // Some feed snapshots omit delta_leader while retaining vehicle elapsed
+  // time. For cars on the same lap, the elapsed-time difference is the direct
+  // on-track interval and keeps the Battle Window populated.
+  const primaryElapsed = Number(primary.vehicle_elapsed_time);
+  const competitorElapsed = Number(competitor.vehicle_elapsed_time);
+  if (primary.vehicle_elapsed_time != null && competitor.vehicle_elapsed_time != null &&
+      Number.isFinite(primaryElapsed) && Number.isFinite(competitorElapsed) &&
+      primaryElapsed >= 0 && competitorElapsed >= 0 &&
+      (primaryLaps === competitorLaps || crossingLineTransient || !Number.isFinite(primaryLaps) || !Number.isFinite(competitorLaps))) {
+    return {
+      lapDelta: 0,
+      gapSeconds: primaryElapsed - competitorElapsed,
+      source: "difference-of-vehicle-elapsed-time",
+    };
+  }
   return null;
 }
