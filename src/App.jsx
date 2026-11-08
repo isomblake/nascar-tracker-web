@@ -365,25 +365,6 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
       })
       .map(lap => ({ lap, value: myLaps.get(lap) - theirLaps.get(lap) }));
   };
-  const lapTimeDelta = (name) => {
-    if (!name) return null;
-    if (demoMode) {
-      const mine = Number(displayLastLap[displayPrimary]);
-      const theirs = Number(displayLastLap[name]);
-      return Number.isFinite(mine) && Number.isFinite(theirs) ? { value: mine - theirs, lap: "demo" } : null;
-    }
-    const myLaps = new Map((LAPS[displayPrimary] || []).map(([lap, time]) => [Number(lap), Number(time)]));
-    const theirLaps = new Map((LAPS[name] || []).map(([lap, time]) => [Number(lap), Number(time)]));
-    const myThreshold = thrFor(BEST, displayPrimary);
-    const theirThreshold = thrFor(BEST, name);
-    const common = [...myLaps.keys()].filter(lap => theirLaps.has(lap)).sort((a,b) => b-a);
-    for (const lap of common) {
-      const mine = myLaps.get(lap), theirs = theirLaps.get(lap);
-      if (isCaution?.(lap) || !(mine > 0 && theirs > 0) || mine > myThreshold || theirs > theirThreshold) continue;
-      return { value: mine - theirs, lap };
-    }
-    return null;
-  };
   const fmt = (v, digits=3) => v == null || !Number.isFinite(Number(v)) ? "—" : Number(v).toFixed(digits);
   const statusLabel = status === "live" ? "LIVE DATA" : status === "no_session" ? "REPLAY / STORED DATA" : String(status || "CONNECTING").toUpperCase();
   const flag = session?.flag_state;
