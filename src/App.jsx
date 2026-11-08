@@ -334,11 +334,21 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   const ahead = ordered.find(n => displayPos[n] === selectedPosition - 1);
   const behind = ordered.find(n => displayPos[n] === selectedPosition + 1);
   const gapTo = (name) => {
-    const result = compareOfficialTiming(selected, displayTiming[name]);
-    if (result?.gapSeconds != null) return { label: (result.gapSeconds > 0 ? "+" : "") + fmt(result.gapSeconds, 2) + "s", value: result.gapSeconds };
+    const competitor = displayTiming[name];
+    const result = compareOfficialTiming(selected, competitor);
+    // Prefer the live elapsed-time interval from the current timing snapshot.
+    // Unlike a stale delta-to-leader field, this is the direct track interval
+    // between these two cars and advances as their lap timing is refreshed.
+    const myElapsed = Number(selected?.vehicle_elapsed_time);
+    const theirElapsed = Number(competitor?.vehicle_elapsed_time);
+    if (result?.gapSeconds != null && Number.isFinite(myElapsed) && Number.isFinite(theirElapsed)) {
+      const interval = myElapsed - theirElapsed;
+      return { label: (interval > 0 ? "+" : "") + fmt(interval, 2) + "s", value: interval, source: "vehicle-elapsed-time" };
+    }
+    if (result?.gapSeconds != null) return { label: (result.gapSeconds > 0 ? "+" : "") + fmt(result.gapSeconds, 2) + "s", value: result.gapSeconds, source: result.source };
     if (result?.lapDelta != null && result.lapDelta !== 0) {
       const laps = Math.abs(result.lapDelta);
-      return { label: laps + " lap" + (laps === 1 ? "" : "s") + (result.lapDelta < 0 ? " behind" : " ahead"), value: result.lapDelta };
+      return { label: laps + " lap" + (laps === 1 ? "" : "s") + (result.lapDelta < 0 ? " behind" : " ahead"), value: result.lapDelta, source: result.source };
     }
     return null;
   };
