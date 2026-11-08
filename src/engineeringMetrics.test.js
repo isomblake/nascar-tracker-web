@@ -55,6 +55,11 @@ describe("engineeringMetrics", () => {
     );
     expect(result.gapSeconds).toBeCloseTo(1.3, 5);
     expect(result.source).toBe("difference-of-official-leader-deltas");
+    const crossing = compareOfficialTiming(
+      { laps_completed: 9, delta_leader: 4.2, last_lap_time: 34.4 },
+      { laps_completed: 8, delta_leader: 3.6, last_lap_time: 34.5 }
+    );
+    expect(crossing).toEqual({ lapDelta: 0, gapSeconds: 0.6, source: "difference-of-official-leader-deltas" });
   });
 
   test("formats time to leader as seconds on the same lap and laps down otherwise", () => {
