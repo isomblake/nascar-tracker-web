@@ -215,15 +215,25 @@ export function compareOfficialTiming(primary, competitor) {
   if (!primary || !competitor) return null;
   const primaryLaps = Number(primary.laps_completed);
   const competitorLaps = Number(competitor.laps_completed);
-  if (Number.isFinite(primaryLaps) && Number.isFinite(competitorLaps) && primaryLaps > 0 && competitorLaps > 0 && primaryLaps !== competitorLaps) {
+  const primaryDelta = Number(primary.delta_leader);
+  const competitorDelta = Number(competitor.delta_leader);
+  const lapDifference = primaryLaps - competitorLaps;
+  const referenceLapTime = Number(competitor.last_lap_time) > 0
+    ? Number(competitor.last_lap_time)
+    : Number(primary.last_lap_time);
+  const crossingLineTransient = Number.isFinite(lapDifference) && Math.abs(lapDifference) === 1 &&
+    primary.delta_leader != null && competitor.delta_leader != null &&
+    Number.isFinite(primaryDelta) && Number.isFinite(competitorDelta) &&
+    primaryDelta >= 0 && competitorDelta >= 0 && referenceLapTime > 0 &&
+    Math.max(primaryDelta, competitorDelta) < referenceLapTime * 0.75;
+  if (Number.isFinite(primaryLaps) && Number.isFinite(competitorLaps) && primaryLaps > 0 && competitorLaps > 0 && primaryLaps !== competitorLaps && !crossingLineTransient) {
     return {
-      lapDelta: primaryLaps - competitorLaps,
+      lapDelta: lapDifference,
       gapSeconds: null,
       source: "official-lap-count",
     };
   }
   const primaryDelta = Number(primary.delta_leader);
-  const competitorDelta = Number(competitor.delta_leader);
   if (Number.isFinite(primaryDelta) && Number.isFinite(competitorDelta) &&
       primary.delta_leader != null && competitor.delta_leader != null &&
       primaryDelta >= 0 && competitorDelta >= 0 &&
