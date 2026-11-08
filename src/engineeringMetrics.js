@@ -10,7 +10,7 @@ export function splitLapsIntoRuns(laps, options = {}) {
   const explicitRunStarts = toSet(options.runStartLaps);
   const sorted = (laps || [])
     .map((row) => ({ lap: Number(row?.[0]), time: Number(row?.[1]) }))
-    .filter((row) => Number.isInteger(row.lap) && row.lap > 0 && Number.isFinite(row.time) && row.time > 0)
+    .filter((row) => Number.isInteger(row.lap) && row.lap > 0 && Number.isFinite(row.time) && row.time > 0 && row.time < 300)
     .sort((a, b) => a.lap - b.lap);
 
   const runs = [];
