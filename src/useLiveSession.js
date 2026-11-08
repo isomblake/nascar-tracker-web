@@ -11,30 +11,13 @@ import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
 import { buildDriverRunAnalysis, isTireChangePitStop } from './engineeringMetrics';
 
-// Track-independent lap classification:
-// - A "pit/outlier lap" is anything significantly slower than the driver's best.
-// - Margin of 5s works across all tracks: short tracks (Martinsville ~20s best, pit ~45s),
-//   intermediates (~30s best, pit ~55s), superspeedways (~47s best, pit ~55s).
-// - Green-flag variation is typically <2s even on worn tires, so 5s is safe.
-const PIT_MARGIN_SECONDS = 5;
 const ABSOLUTE_MAX_LAP = 300;    // hard cap for obviously bad data
 const WINDOWS = [5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100];
 
 // ─── pure helpers ─────────────────────────────────────────────────
 
-// Compute the per-driver threshold above which a lap is considered a pit/outlier.
-// Uses best lap + margin. Caller can pass a pre-computed best to avoid re-scanning.
-function driverThreshold(laps, bestOverride = null) {
-  if (!laps.length) return ABSOLUTE_MAX_LAP;
-  const best = bestOverride != null
-    ? bestOverride
-    : Math.min(...laps.map(([, t]) => t).filter((t) => t > 0 && t < ABSOLUTE_MAX_LAP));
-  if (!isFinite(best) || best <= 0) return ABSOLUTE_MAX_LAP;
-  return best + PIT_MARGIN_SECONDS;
-}
-
-function cleanLaps(laps, thr) {
-  return laps.filter(([, t]) => t > 0 && t <= thr);
+function cleanLaps(laps) {
+  return laps.filter(([, t]) => t > 0 && t < ABSOLUTE_MAX_LAP);
 }
 
 function rollingAvg(laps, n) {
@@ -63,17 +46,14 @@ function bestSingle(laps) {
   return Math.min(...candidates);
 }
 
-// Detect current stint. A stint break happens at EITHER:
-//   (a) a pit lap (this driver's time > best + 5s), OR
-//   (b) a caution lap (field-wide slowdown, passed in via cautionSet)
-// Current stint = all clean laps AFTER the most recent boundary of either type.
-// Operates on raw laps so pit laps are visible as boundaries.
-function currentStint(rawLapsAsc, thr, cautionSet = new Set(), explicitPitSet = new Set()) {
+// Stints break only on explicit pit/caution evidence or a missing source lap.
+// Lap-time outliers alone are not sufficient evidence of a pit stop.
+function currentStint(rawLapsAsc, cautionSet = new Set(), explicitPitSet = new Set()) {
   if (!rawLapsAsc.length) return [];
   let lastBoundaryIdx = -1;
   for (let i = 0; i < rawLapsAsc.length; i++) {
     const [lapNum, lapTime] = rawLapsAsc[i];
-    const isPit = explicitPitSet.has(lapNum) || lapTime > thr;
+    const isPit = explicitPitSet.has(lapNum);
     const isCaution = cautionSet.has(lapNum);
     const hasLapGap = i > 0 && lapNum !== rawLapsAsc[i - 1][0] + 1;
     if (isPit || isCaution) lastBoundaryIdx = i;
@@ -81,7 +61,7 @@ function currentStint(rawLapsAsc, thr, cautionSet = new Set(), explicitPitSet = 
   }
   const afterBoundary = rawLapsAsc.slice(lastBoundaryIdx + 1);
   // Filter out any remaining pit/caution laps (shouldn't happen, but defensive)
-  return afterBoundary.filter(([n, t]) => t > 0 && t <= thr && !cautionSet.has(n));
+  return afterBoundary.filter(([n, t]) => t > 0 && t < ABSOLUTE_MAX_LAP && !cautionSet.has(n) && !explicitPitSet.has(n));
 }
 
 // Compute BEST/EOR for one driver's laps. Excludes both personal outliers
@@ -89,15 +69,13 @@ function currentStint(rawLapsAsc, thr, cautionSet = new Set(), explicitPitSet = 
 function computeDriverStats(rawLaps, cautionSet = new Set(), explicitPitSet = new Set()) {
   const laps = [...rawLaps].sort((a, b) => a[0] - b[0]);
 
-  // Per-driver threshold: best lap + 5s. Works at every track.
   const bestLap = bestSingle(laps.filter(([n]) => !explicitPitSet.has(n)));
-  const thr = driverThreshold(laps, bestLap);
 
-  // For BEST window computation, exclude explicit pit laps and field-wide caution laps.
-  const clean = cleanLaps(laps, thr).filter(([n]) => !cautionSet.has(n) && !explicitPitSet.has(n));
+  // Preserve slow but valid green-flag laps; remove only verified pit/caution laps.
+  const clean = cleanLaps(laps).filter(([n]) => !cautionSet.has(n) && !explicitPitSet.has(n));
 
   // Current stint uses RAW laps so explicit pit/caution and lap-gap boundaries are visible.
-  const stintAsc = currentStint(laps, thr, cautionSet, explicitPitSet);
+  const stintAsc = currentStint(laps, cautionSet, explicitPitSet);
 
   // BEST window (search within current stint only — since session-best is meaningless)
   const best = {};
@@ -477,24 +455,20 @@ function detectCautionLaps(rawLaps) {
       LAPS[dispName] = stats.laps;
       STINT[dispName] = stats.stint;
 
-      // Find last pit lap: highest lap where time exceeds pit threshold.
-      // Use best+20 (not the general +5 stint margin) so caution laps that slip
-      // through cautionSet detection don't register as pit stops. Pit stops are
-      // always 30-50s above best; caution laps are typically only 8-15s above.
-      const bestL = stats.best.best;
-      const pitThr = (bestL != null && bestL > 0) ? bestL + 20 : ABSOLUTE_MAX_LAP;
+      // Last pit lap comes from explicit lap flags or recorded pit-stop events only.
       let lastPitLap = null;
-      for (let i = stats.laps.length - 1; i >= 0; i--) {
-        const [n, t] = stats.laps[i];
-        if (t > pitThr && !cautionSet.has(n)) { lastPitLap = n; break; }
+      for (const lap of explicitPitSet) lastPitLap = Math.max(lastPitLap ?? 0, lap);
+      for (const stop of driverPitStops) {
+        const lap = Number(stop.lap_number);
+        if (Number.isInteger(lap) && lap > 0) lastPitLap = Math.max(lastPitLap ?? 0, lap);
       }
       LAST_PIT[dispName] = lastPitLap;
 
-      // Most recent clean lap time (not caution, not pit)
+      // Most recent usable lap, excluding only explicit pit/caution laps.
       let lastLapTime = null;
       for (let i = stats.laps.length - 1; i >= 0; i--) {
         const [n, t] = stats.laps[i];
-        if (t > 0 && t <= pitThr && !cautionSet.has(n)) { lastLapTime = t; break; }
+        if (t > 0 && t < ABSOLUTE_MAX_LAP && !cautionSet.has(n) && !explicitPitSet.has(n)) { lastLapTime = t; break; }
       }
       LAST_LAP_TIME[dispName] = lastLapTime;
 
