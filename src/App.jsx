@@ -408,16 +408,11 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official interval or lap-count difference</div></div>
         {[["AHEAD",ahead],["BEHIND",behind]].map(([label,name]) => {
           const d= name ? gapTo(name) : null;
-          const lapDelta= name ? lapTimeDelta(name) : null;
           return <div key={label} style={{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:8,alignItems:"center",padding:"9px 0",borderTop:"1px solid "+palette.line}}>
             <div style={{fontSize:9,fontWeight:900,color:palette.muted,letterSpacing:1}}>{label}</div>
             <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:800,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name ? "#"+(NUM[name]||"?")+" "+name : "No car "+label.toLowerCase()}</div><div style={{fontSize:9,color:palette.muted,marginTop:2}}>P{ name ? SIM_POS[name] : "—"} · {name ? (TIMING[name]?.laps_completed ?? "—")+" laps" : "—"}</div></div>
             <div style={{textAlign:"right"}}>
               <div style={{fontSize:13,fontWeight:900,color:d==null?palette.muted:(typeof d.value==="number" && d.value>0)?palette.red:palette.green,...mono}}>{d?.label || "—"}</div>
-              <div style={{fontSize:10,fontWeight:800,color:lapDelta==null?palette.muted:lapDelta.value>0?palette.red:palette.green,...mono,marginTop:4}}>
-                {lapDelta==null ? "Lap Δ —" : (lapDelta.value>0?"+":"")+lapDelta.value.toFixed(3)+"s lap Δ"}
-              </div>
-              <div style={{fontSize:8,color:palette.muted,marginTop:2}}>{lapDelta ? (lapDelta.lap==="demo"?"synthetic lap": "same clean lap "+lapDelta.lap) : "no matched clean lap"}</div>
             </div>
           </div>;
         })}
