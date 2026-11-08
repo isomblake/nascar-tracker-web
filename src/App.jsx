@@ -327,9 +327,23 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   const leaderName = ordered.find(n => displayPos[n] === 1);
   const leaderTiming = leaderName ? displayTiming[leaderName] : null;
   const timeToLeader = formatOfficialLeaderGap(selected, leaderTiming);
-  const paceDeficit = timeToLeader?.type === "laps" && timeToLeader.value > 0
-    ? estimatePaceDeficitPerLap(displayEor[displayPrimary]?.t5, displayEor[leaderName]?.t5)
+  // Compare the most recent up-to-five clean laps in each driver's current stint.
+  // A full five-lap window is ideal, but after a caution/restart we still show
+  // a provisional estimate from the clean laps that are actually available.
+  const paceSample = (name) => {
+    const rows = (STINT[name] || []).slice(-5)
+      .map((row) => Number(row?.[1]))
+      .filter((time) => Number.isFinite(time) && time > 0);
+    return rows.length ? { average: rows.reduce((sum, time) => sum + time, 0) / rows.length, count: rows.length } : null;
+  };
+  const selectedPaceSample = paceSample(displayPrimary);
+  const leaderPaceSample = paceSample(leaderName);
+  const paceDeficit = selectedPaceSample && leaderPaceSample
+    ? estimatePaceDeficitPerLap(selectedPaceSample.average, leaderPaceSample.average)
     : null;
+  const paceSampleLabel = selectedPaceSample && leaderPaceSample
+    ? `Current stint · ${Math.min(selectedPaceSample.count, leaderPaceSample.count)} clean laps vs leader (${selectedPaceSample.count}/${leaderPaceSample.count} available)`
+    : "Waiting for clean laps from selected driver and leader";
   const selectedPosition = displayPos[displayPrimary] || 99;
   const ahead = ordered.find(n => displayPos[n] === selectedPosition - 1);
   const behind = ordered.find(n => displayPos[n] === selectedPosition + 1);
@@ -405,7 +419,7 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
       <div style={{display:"grid",gridTemplateColumns:"repeat(2,minmax(0,1fr))",gap:8,marginBottom:10}}>
         {metric("SELECTED DRIVER", "#"+(displayNum[displayPrimary] || "?")+" · "+displayPrimary.split(" ").slice(-1)[0], "P"+(displayPos[displayPrimary] || "—")+" · "+(selected.laps_completed ?? "—")+" laps completed")}
         {metric("LAP DEFICIT", timeToLeader?.label || "—", "Official lap-count difference to leader")}
-        {metric("PACE DEFICIT / LAP", paceDeficit == null ? "—" : (paceDeficit > 0 ? "+" : "")+paceDeficit.toFixed(2)+"s", demoMode ? "Synthetic five-lap average vs leader" : "Estimated current-stint 5-lap average vs leader")}
+        {metric("PACE DEFICIT / LAP", paceDeficit == null ? "—" : (paceDeficit > 0 ? "+" : "")+paceDeficit.toFixed(2)+"s", demoMode ? "Synthetic five-lap average vs leader" : paceSampleLabel)}
         {metric("LAST CLEAN LAP", fmt(displayLastLap[displayPrimary]), "Lap-time history filter excludes detected cautions / pit laps")}
         {metric("LAST 5 LAP AVG", fmt(displayEor[displayPrimary]?.t5), "Current stint · latest five clean laps available")}
       </div>
