@@ -282,7 +282,7 @@ function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggle
 
 
 /* ═══ RACE COMMAND COCKPIT ═══ */
-function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, EOR, STINT, primary, onSelectDriver, dark, status }) {
+function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIME, BEST, EOR, STINT, LAPS, isCaution, primary, onSelectDriver, dark, status }) {
   const [demoMode, setDemoMode] = useState(false);
   const [demoScenario, setDemoScenario] = useState("3 laps down");
   const [demoSelectedDriver, setDemoSelectedDriver] = useState("Brad Keselowski");
@@ -330,14 +330,34 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   const paceDeficit = timeToLeader?.type === "laps" && timeToLeader.value > 0
     ? estimatePaceDeficitPerLap(displayEor[displayPrimary]?.t5, displayEor[leaderName]?.t5)
     : null;
-  const ahead = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) - 1);
-  const behind = ordered.find(n => SIM_POS[n] === (SIM_POS[primary] || 99) + 1);
+  const selectedPosition = displayPos[displayPrimary] || 99;
+  const ahead = ordered.find(n => displayPos[n] === selectedPosition - 1);
+  const behind = ordered.find(n => displayPos[n] === selectedPosition + 1);
   const gapTo = (name) => {
     const result = compareOfficialTiming(selected, displayTiming[name]);
     if (result?.gapSeconds != null) return { label: (result.gapSeconds > 0 ? "+" : "") + fmt(result.gapSeconds, 2) + "s", value: result.gapSeconds };
     if (result?.lapDelta != null && result.lapDelta !== 0) {
       const laps = Math.abs(result.lapDelta);
       return { label: laps + " lap" + (laps === 1 ? "" : "s") + (result.lapDelta < 0 ? " behind" : " ahead"), value: result.lapDelta };
+    }
+    return null;
+  };
+  const lapTimeDelta = (name) => {
+    if (!name) return null;
+    if (demoMode) {
+      const mine = Number(displayLastLap[displayPrimary]);
+      const theirs = Number(displayLastLap[name]);
+      return Number.isFinite(mine) && Number.isFinite(theirs) ? { value: mine - theirs, lap: "demo" } : null;
+    }
+    const myLaps = new Map((LAPS[displayPrimary] || []).map(([lap, time]) => [Number(lap), Number(time)]));
+    const theirLaps = new Map((LAPS[name] || []).map(([lap, time]) => [Number(lap), Number(time)]));
+    const myThreshold = thrFor(BEST, displayPrimary);
+    const theirThreshold = thrFor(BEST, name);
+    const common = [...myLaps.keys()].filter(lap => theirLaps.has(lap)).sort((a,b) => b-a);
+    for (const lap of common) {
+      const mine = myLaps.get(lap), theirs = theirLaps.get(lap);
+      if (isCaution?.(lap) || !(mine > 0 && theirs > 0) || mine > myThreshold || theirs > theirThreshold) continue;
+      return { value: mine - theirs, lap };
     }
     return null;
   };
@@ -375,10 +395,17 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official interval or lap-count difference</div></div>
         {[["AHEAD",ahead],["BEHIND",behind]].map(([label,name]) => {
           const d= name ? gapTo(name) : null;
+          const lapDelta= name ? lapTimeDelta(name) : null;
           return <div key={label} style={{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:8,alignItems:"center",padding:"9px 0",borderTop:"1px solid "+palette.line}}>
             <div style={{fontSize:9,fontWeight:900,color:palette.muted,letterSpacing:1}}>{label}</div>
             <div style={{minWidth:0}}><div style={{fontSize:12,fontWeight:800,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name ? "#"+(NUM[name]||"?")+" "+name : "No car "+label.toLowerCase()}</div><div style={{fontSize:9,color:palette.muted,marginTop:2}}>P{ name ? SIM_POS[name] : "—"} · {name ? (TIMING[name]?.laps_completed ?? "—")+" laps" : "—"}</div></div>
-            <div style={{fontSize:13,fontWeight:900,color:d==null?palette.muted:(typeof d.value==="number" && d.value>0)?palette.red:palette.green,...mono}}>{d?.label || "—"}</div>
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:13,fontWeight:900,color:d==null?palette.muted:(typeof d.value==="number" && d.value>0)?palette.red:palette.green,...mono}}>{d?.label || "—"}</div>
+              <div style={{fontSize:10,fontWeight:800,color:lapDelta==null?palette.muted:lapDelta.value>0?palette.red:palette.green,...mono,marginTop:4}}>
+                {lapDelta==null ? "Lap Δ —" : (lapDelta.value>0?"+":"")+lapDelta.value.toFixed(3)+"s lap Δ"}
+              </div>
+              <div style={{fontSize:8,color:palette.muted,marginTop:2}}>{lapDelta ? (lapDelta.lap==="demo"?"synthetic lap": "same clean lap "+lapDelta.lap) : "no matched clean lap"}</div>
+            </div>
           </div>;
         })}
       </div>
@@ -845,7 +872,7 @@ export default function App() {
             ))}
           </div>
 
-          {tab === 0 && <RaceCommandCockpit session={session} NAMES={NAMES} NUM={NUM} SIM_POS={SIM_POS} TIMING={TIMING} LAST_LAP_TIME={LAST_LAP_TIME} BEST={BEST} EOR={EOR} STINT={STINT} primary={primaryResolved} onSelectDriver={setPrimary} dark={dark} status={status} />}
+          {tab === 0 && <RaceCommandCockpit session={session} NAMES={NAMES} NUM={NUM} SIM_POS={SIM_POS} TIMING={TIMING} LAST_LAP_TIME={LAST_LAP_TIME} BEST={BEST} EOR={EOR} STINT={STINT} LAPS={LAPS} isCaution={isCaution} primary={primaryResolved} onSelectDriver={setPrimary} dark={dark} status={status} />}
           {tab === 0 && false && (
             <div style={{ padding: "0 10px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", marginBottom: 6 }}>
