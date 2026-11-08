@@ -11,7 +11,6 @@ import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
 import { buildDriverRunAnalysis, isTireChangePitStop } from './engineeringMetrics';
 
-const PIT_MARGIN_SECONDS = 5;
 const ABSOLUTE_MAX_LAP = 300;
 const WINDOWS = [5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100];
 
@@ -21,17 +20,8 @@ const PALETTE = [
   '#14b8a6','#8b5cf6','#f59e0b','#3b82f6','#ef4444','#0ea5e9',
 ];
 
-function driverThreshold(laps, bestOverride = null) {
-  if (!laps.length) return ABSOLUTE_MAX_LAP;
-  const best = bestOverride != null
-    ? bestOverride
-    : Math.min(...laps.map(([, t]) => t).filter((t) => t > 0 && t < ABSOLUTE_MAX_LAP));
-  if (!isFinite(best) || best <= 0) return ABSOLUTE_MAX_LAP;
-  return best + PIT_MARGIN_SECONDS;
-}
-
-function cleanLaps(laps, thr) {
-  return laps.filter(([, t]) => t > 0 && t <= thr);
+function cleanLaps(laps) {
+  return laps.filter(([, t]) => t > 0 && t < ABSOLUTE_MAX_LAP);
 }
 
 function rollingAvg(laps, n) {
@@ -57,24 +47,23 @@ function bestSingle(laps) {
   return candidates.length ? Math.min(...candidates) : null;
 }
 
-function currentStint(rawLapsAsc, thr, cautionSet = new Set()) {
+function currentStint(rawLapsAsc, cautionSet = new Set(), explicitPitSet = new Set()) {
   if (!rawLapsAsc.length) return [];
   let lastBoundaryIdx = -1;
   for (let i = 0; i < rawLapsAsc.length; i++) {
     const [lapNum, lapTime] = rawLapsAsc[i];
-    if (lapTime > thr || cautionSet.has(lapNum)) lastBoundaryIdx = i;
+    if (explicitPitSet.has(lapNum) || cautionSet.has(lapNum)) lastBoundaryIdx = i;
   }
   return rawLapsAsc
     .slice(lastBoundaryIdx + 1)
-    .filter(([n, t]) => t > 0 && t <= thr && !cautionSet.has(n));
+    .filter(([n, t]) => t > 0 && t < ABSOLUTE_MAX_LAP && !cautionSet.has(n) && !explicitPitSet.has(n));
 }
 
-function computeDriverStats(rawLaps, cautionSet = new Set()) {
+function computeDriverStats(rawLaps, cautionSet = new Set(), explicitPitSet = new Set()) {
   const laps = [...rawLaps].sort((a, b) => a[0] - b[0]);
   const bestLap = bestSingle(laps);
-  const thr = driverThreshold(laps, bestLap);
-  const clean = cleanLaps(laps, thr).filter(([n]) => !cautionSet.has(n));
-  const stintAsc = currentStint(laps, thr, cautionSet);
+  const clean = cleanLaps(laps).filter(([n]) => !cautionSet.has(n) && !explicitPitSet.has(n));
+  const stintAsc = currentStint(laps, cautionSet, explicitPitSet);
 
   const best = {};
   for (const n of WINDOWS) best[`t${n}`] = bestWindow(stintAsc, n);
@@ -209,11 +198,15 @@ export function useHistorySession(sessionId) {
       NUM[name] = d.car_number || '?';
       GROUPS[name] = normalizePracticeGroup(d.practice_group);
 
-      const stats = computeDriverStats(byDriver[dkey] || [], cautionSet);
       const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
+      const explicitPitSet = new Set([
+        ...driverPitStops.filter(isTireChangePitStop).map((stop) => Number(stop.lap_number)),
+        ...canonicalLaps.filter(row => row.driver_key === dkey && row.is_pit === true).map(row => Number(row.lap_number)),
+      ]);
+      const stats = computeDriverStats(byDriver[dkey] || [], cautionSet, explicitPitSet);
       RUN_ANALYSIS[name] = buildDriverRunAnalysis(
         stats.laps,
-        { cautionLaps: [...cautionSet], pitLaps: [...driverPitStops.filter(isTireChangePitStop).map((stop) => stop.lap_number), ...(canonicalLaps.filter(row=>row.driver_key===dkey&&row.is_pit===true).map(row=>row.lap_number))] }
+        { cautionLaps: [...cautionSet], pitLaps: [...explicitPitSet] }
       );
       PIT_STOPS[name] = driverPitStops;
       BEST[name] = stats.best;
