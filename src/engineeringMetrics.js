@@ -233,11 +233,10 @@ export function compareOfficialTiming(primary, competitor) {
       source: "official-lap-count",
     };
   }
-  const primaryDelta = Number(primary.delta_leader);
   if (Number.isFinite(primaryDelta) && Number.isFinite(competitorDelta) &&
       primary.delta_leader != null && competitor.delta_leader != null &&
       primaryDelta >= 0 && competitorDelta >= 0 &&
-      (primaryLaps === competitorLaps || !Number.isFinite(primaryLaps) || !Number.isFinite(competitorLaps))) {
+      (primaryLaps === competitorLaps || crossingLineTransient || !Number.isFinite(primaryLaps) || !Number.isFinite(competitorLaps))) {
     return {
       lapDelta: 0,
       gapSeconds: primaryDelta - competitorDelta,
