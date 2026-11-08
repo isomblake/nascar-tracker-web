@@ -6,7 +6,7 @@
 // averages, best windows, end-of-run) are computed here on the client.
 // ═══════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
 import { buildDriverRunAnalysis, isTireChangePitStop } from './engineeringMetrics';
@@ -103,6 +103,11 @@ export function useLiveSession() {
   const [rawPitStops, setRawPitStops] = useState([]); // append-only pit stop events from NASCAR feed
   const [status, setStatus] = useState('connecting');
   const [error, setError] = useState(null);
+  const rawLapsRef = useRef(rawLaps);
+  const driversRef = useRef(drivers);
+  const pollInFlightRef = useRef(false);
+  useEffect(() => { rawLapsRef.current = rawLaps; }, [rawLaps]);
+  useEffect(() => { driversRef.current = drivers; }, [drivers]);
 
   // Load initial active session + its data
   const loadAll = useCallback(async () => {
@@ -240,14 +245,17 @@ export function useLiveSession() {
     const pollActiveData = async () => {
       if (!session?.id || !session?.is_active || cancelled) return;
       const sessId = session.id;
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
 
       try {
         // Fetch laps beyond a buffered floor. Using global maxLap directly would
         // strand drivers who lag behind the leader — if any driver gets lap N+1
         // written first, maxLap jumps and the query skips lap N+1 for others.
         // Re-checking the last 20 laps on every poll catches any stragglers.
-        const maxLap = rawLaps.length > 0
-          ? Math.max(...rawLaps.map((r) => r.lap_number))
+        const currentLaps = rawLapsRef.current;
+        const maxLap = currentLaps.length > 0
+          ? Math.max(...currentLaps.map((r) => Number(r.lap_number) || 0))
           : 0;
         const fetchFrom = Math.max(0, maxLap - 20);
 
@@ -270,10 +278,21 @@ export function useLiveSession() {
         }
         if (!cancelled && newLaps.length > 0) {
           setRawLaps((prev) => {
-            // Merge by (driver_key, lap_number) so corrected timing and pit flags replace stale rows.
-            const merged = new Map(prev.map((r) => [`${r.driver_key}:${r.lap_number}`, r]));
-            for (const row of newLaps) merged.set(`${row.driver_key}:${row.lap_number}`, row);
-            return [...merged.values()].sort((a, b) => a.lap_number - b.lap_number);
+            // Merge buffered rereads, but don't trigger renders for unchanged rows.
+            const merged = new Map(prev.map((r) => [String(r.driver_key) + ':' + String(r.lap_number), r]));
+            let changed = false;
+            for (const row of newLaps) {
+              const key = String(row.driver_key) + ':' + String(row.lap_number);
+              const prior = merged.get(key);
+              if (!prior || Number(prior.lap_time) !== Number(row.lap_time) || prior.is_pit !== row.is_pit || prior.is_caution !== row.is_caution) {
+                merged.set(key, row);
+                changed = true;
+              }
+            }
+            if (!changed) return prev;
+            const next = [...merged.values()].sort((a, b) => Number(a.lap_number) - Number(b.lap_number));
+            rawLapsRef.current = next;
+            return next;
           });
         }
 
@@ -295,7 +314,7 @@ export function useLiveSession() {
 
         // Re-fetch drivers if missing — happens when START is tapped before
         // poll-nascar's first write (fire-and-forget takes 2-5s).
-        if (drivers.length === 0) {
+        if (driversRef.current.length === 0) {
           const { data: drvs } = await supabase
             .from('drivers')
             .select('*')
@@ -312,6 +331,9 @@ export function useLiveSession() {
         if (!cancelled && sess) setSession(sess);
       } catch (e) {
         console.warn('[useLiveSession] poll error', e);
+        if (!cancelled) setError(e.message || String(e));
+      } finally {
+        pollInFlightRef.current = false;
       }
     };
 
@@ -345,7 +367,7 @@ export function useLiveSession() {
       clearInterval(dataInterval);
       clearInterval(discoveryInterval);
     };
-  }, [session?.id, session?.is_active, rawLaps, loadAll, drivers.length]);
+  }, [session?.id, session?.is_active, loadAll]);
 
 // ═══════════════════════════════════════════════════════════════════
 // Field-wide caution detection:
