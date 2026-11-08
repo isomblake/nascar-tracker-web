@@ -254,76 +254,29 @@ class PracticeMatrixErrorBoundary extends React.Component {
 }
 
 function PracticeLapMatrix({lapsByDriver,names,numbers,selectedDriver,dark,accent,runAnalysis={},favorites=[],onToggleFavorite}) {
- const [mode,setMode]=useState("top10"), [view,setView]=useState("time"), [windowSize,setWindowSize]=useState("50"), [paceWindow,setPaceWindow]=useState("10");
- const [sortLap,setSortLap]=useState(null), [sortDir,setSortDir]=useState(1);
- const border=dark?"#263247":"#dce2ea", panel=dark?"#111b2b":"#fff", muted=dark?"#8b9bb0":"#66758a", fg=dark?"#e8eef7":"#172235";
- const driverNames=Array.isArray(names)?names:[];
- const lapData=lapsByDriver&&typeof lapsByDriver==="object"?lapsByDriver:{};
- const numberData=numbers&&typeof numbers==="object"?numbers:{};
- const validLaps=(n)=>Array.isArray(lapData[n])?lapData[n].filter(x=>Array.isArray(x)&&x.length>=2&&Number.isFinite(Number(x[0]))&&Number(x[1])>0&&Number.isFinite(Number(x[1]))).sort((a,b)=>Number(a[0])-Number(b[0])):[];
- // Matrix columns are each driver's own completed-lap sequence, not the shared session lap_number.
- const sequences=Object.fromEntries(driverNames.map(n=>[n,validLaps(n).map((x,i)=>({index:i+1,sourceLap:Number(x[0]),time:Number(x[1])}))]));
- const maxLaps=Math.max(0,...driverNames.map(n=>sequences[n].length));
- const laps=Array.from({length:maxLaps},(_,i)=>i+1);
- const shown=windowSize==="all"?laps:laps.slice(-Number(windowSize));
- const maps=Object.fromEntries(driverNames.map(n=>[n,new Map(sequences[n].map(x=>[x.index,x.time]))]));
- const sourceLapToIndex=Object.fromEntries(driverNames.map(n=>[n,new Map(sequences[n].map(x=>[x.sourceLap,x.index]))]));
- const best=Object.fromEntries(driverNames.map(n=>{const times=sequences[n].map(x=>x.time);return [n,times.length?Math.min(...times):null];}));
- const rawTime=(n,l)=>{const t=maps[n]?.get(l);return t>0&&Number.isFinite(t)?t:null;};
- const time=(n,l)=>{const t=rawTime(n,l);return t!=null&&(best[n]==null||t<=best[n]+5)?t:null;};
- // Best valid consecutive N-lap average for each driver. Lap IDs must increment by exactly one.
- const nWindow=Number(paceWindow);
- const bestWindows=Object.fromEntries(driverNames.map(n=>{
-  const rows=sequences[n];let fastest=null;
-  for(let i=nWindow-1;i<rows.length;i++){
-   const w=rows.slice(i-nWindow+1,i+1);
-   if(w.some((x,j)=>j>0&&x.sourceLap!==w[j-1].sourceLap+1))continue;
-   const valid=w.map(x=>time(n,x.index));
-   if(valid.some(x=>x==null))continue;
-   const avg=valid.reduce((sum,x)=>sum+x,0)/nWindow;
-   if(fastest==null||avg<fastest.avg)fastest={avg,fromLap:w[0].sourceLap,toLap:w[nWindow-1].sourceLap};
-  }
-  return [n,fastest];
- }));
- const rankedWindows=driverNames.map(n=>({name:n,...(bestWindows[n]||{})})).filter(x=>Number.isFinite(x.avg)).sort((a,b)=>a.avg-b.avg);
- const median=values=>{if(!values.length)return null;const v=[...values].sort((a,b)=>a-b),m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2;};
- const benchmark=mode==="driver"?(bestWindows[selectedDriver]?.avg??null):mode==="fastest"?(rankedWindows[0]?.avg??null):mode==="fieldMedian"?median(rankedWindows.map(x=>x.avg)):median(rankedWindows.slice(0,Math.min(mode==="top20"?20:10,rankedWindows.length)).map(x=>x.avg));
- // Matrix cell deltas are lap-vs-lap: compare each individual lap to the field median for that lap.
- const base=l=>median(driverNames.map(n=>time(n,l)).filter(x=>x!=null));
- const fastestByLap=Object.fromEntries(shown.map(l=>{const entries=driverNames.map(n=>({name:n,time:time(n,l)})).filter(x=>x.time!=null).sort((a,b)=>a.time-b.time);return [l,entries[0]||null];}));
- const runEnds=Object.fromEntries(driverNames.map(n=>{const runs=Array.isArray(runAnalysis?.[n]?.runs)?runAnalysis[n].runs:[];const ends=new Set();runs.slice(0,-1).forEach(run=>{const index=sourceLapToIndex[n]?.get(Number(run.endLap));if(index!=null)ends.add(index);});return [n,ends];}));
- const label=mode==="fastest"?"Fastest driver's best "+paceWindow+" consecutive":mode==="fieldMedian"?"Field median · best "+paceWindow+" consecutive":mode==="top10"?"Top-10 median · best "+paceWindow+" consecutive":mode==="top20"?"Top-20 median · best "+paceWindow+" consecutive":"Selected driver's best "+paceWindow+" consecutive";
- const ordered=[...driverNames].sort((a,b)=>{
-  const af=favorites.includes(a),bf=favorites.includes(b);
-  if(af!==bf)return af?-1:1;
-  if(sortLap!=null){const at=time(a,sortLap),bt=time(b,sortLap);if(at==null&&bt!=null)return 1;if(bt==null&&at!=null)return -1;if(at!=null&&bt!=null&&at!==bt)return (at-bt)*sortDir;}
-  return (parseInt(numberData[a],10)||999)-(parseInt(numberData[b],10)||999);
- });
- const toggleSort=l=>{if(sortLap===l)setSortDir(d=>-d);else{setSortLap(l);setSortDir(1);}};
- return <div style={{padding:12,minHeight:180}}>
-  <div style={{fontSize:14,fontWeight:800,marginBottom:4}}>Lap-by-lap comparison</div>
-  <div style={{fontSize:10,color:muted,marginBottom:10}}>Each column is that driver's own lap count. Star drivers to pin them to the top; tap a lap header to rank the field by that lap number.</div>
-  {driverNames.length===0||laps.length===0 ? <div style={{padding:18,textAlign:"center",border:"1px solid "+border,borderRadius:8,color:muted,fontSize:12}}>{driverNames.length===0?"Driver data is still loading for this session.":"No lap times are available for this session yet."}</div> : <>
-  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:10}}>
-   <label style={{fontSize:10,color:muted}}>Benchmark<select value={mode} onChange={e=>setMode(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="fastest">Fastest driver</option><option value="fieldMedian">Field median</option><option value="top10">Top-10 median</option><option value="top20">Top-20 median</option><option value="driver">Selected driver</option></select></label>
-   <label style={{fontSize:10,color:muted}}>Consecutive window<select value={paceWindow} onChange={e=>setPaceWindow(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}>{[5,10,15,20,25,30,35,40,50,75,100].map(v=><option key={v} value={String(v)}>{v} laps</option>)}</select></label>
-   <label style={{fontSize:10,color:muted}}>Display<select value={view} onChange={e=>setView(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="delta">Gap to lap median</option><option value="time">Lap time</option></select></label>
-   <label style={{fontSize:10,color:muted}}>Lap range<select value={windowSize} onChange={e=>setWindowSize(e.target.value)} style={{display:"block",width:"100%",padding:7,marginTop:3,background:panel,color:fg,border:"1px solid "+border}}><option value="25">Last 25</option><option value="50">Last 50</option><option value="100">Last 100</option><option value="all">All laps</option></select></label>
-   <div style={{fontSize:10,color:muted,alignSelf:"end"}}>Slow laps remain visible but are excluded from benchmarks and fastest-lap metrics. A qualifying window requires consecutive source lap numbers with no excluded or missing lap.</div>
+ const [paceWindow,setPaceWindow]=useState("10"),[showMatrix,setShowMatrix]=useState(false),[matrixRange,setMatrixRange]=useState("25");
+ const border=dark?"#263247":"#dce2ea",panel=dark?"#111b2b":"#fff",muted=dark?"#8b9bb0":"#66758a",fg=dark?"#e8eef7":"#172235";
+ const driverNames=Array.isArray(names)?names:[],lapData=lapsByDriver||{},numberData=numbers||{},n=Number(paceWindow);
+ const bestRuns=driverNames.map(name=>{let best=null;const runs=Array.isArray(runAnalysis?.[name]?.runs)?runAnalysis[name].runs:[];for(const run of runs){const rows=Array.isArray(run.laps)?run.laps:[];for(let i=n-1;i<rows.length;i++){const w=rows.slice(i-n+1,i+1);if(w.length!==n||w.some((r,j)=>j>0&&Number(r.lap)!==Number(w[j-1].lap)+1))continue;const ts=w.map(r=>Number(r.time));if(ts.some(t=>!Number.isFinite(t)||t<=0))continue;const avg=ts.reduce((x,y)=>x+y,0)/n;if(!best||avg<best.average)best={average:avg,startLap:Number(w[0].lap),endLap:Number(w[n-1].lap),runNumber:run.runNumber};}}return {name,...(best||{})};}).filter(x=>Number.isFinite(x.average)).sort((a,b)=>a.average-b.average);
+ const median=xs=>{if(!xs.length)return null;const v=[...xs].sort((a,b)=>a-b),m=Math.floor(v.length/2);return v.length%2?v[m]:(v[m-1]+v[m])/2;};
+ const fieldMedian=median(bestRuns.map(x=>x.average)),top10Median=median(bestRuns.slice(0,10).map(x=>x.average)),top20Median=median(bestRuns.slice(0,20).map(x=>x.average)),selected=bestRuns.find(x=>x.name===selectedDriver);
+ const maxLap=Math.max(0,...driverNames.flatMap(name=>(lapData[name]||[]).map(x=>Number(x?.[0])).filter(Number.isFinite))),count=Math.min(matrixRange==="all"?maxLap:Number(matrixRange),maxLap),shown=Array.from({length:count},(_,i)=>maxLap-count+i+1);
+ const maps=Object.fromEntries(driverNames.map(name=>[name,new Map((lapData[name]||[]).map(x=>[Number(x[0]),Number(x[1])]))]));
+ const card={border:"1px solid "+border,borderRadius:8,background:panel};
+ const metric=(label,value)=> <div style={{...card,padding:"10px 12px"}}><div style={{fontSize:9,color:muted,fontWeight:700,textTransform:"uppercase"}}>{label}</div><div style={{fontSize:17,fontWeight:800,color:fg,marginTop:3,fontVariantNumeric:"tabular-nums"}}>{value==null?"—":value.toFixed(3)+" s"}</div></div>;
+ return <div style={{padding:12,color:fg}}>
+  <div style={{fontSize:16,fontWeight:850,marginBottom:4}}>Consecutive-run pace</div>
+  <div style={{fontSize:11,color:muted,lineHeight:1.5,marginBottom:12}}>This ranks each driver by their fastest average over an uninterrupted block of laps within a single run. We never combine laps from separate runs. A run boundary is a pit stop, caution, or missing lap.</div>
+  <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",marginBottom:12}}><label style={{fontSize:11,color:muted,fontWeight:700}}>CONSECUTIVE LAPS <select value={paceWindow} onChange={e=>setPaceWindow(e.target.value)} style={{marginLeft:6,padding:"7px 9px",background:panel,color:fg,border:"1px solid "+border,borderRadius:6}}>{[5,10,15,20,25,30,35,40,50,75,100].map(v=><option key={v} value={String(v)}>{v} laps</option>)}</select></label><span style={{fontSize:10,color:muted}}>Example: 10 laps means one uninterrupted 10-lap sequence.</span></div>
+  <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:12}}>{metric("Fastest driver",bestRuns[0]?.average)}{metric("Top-10 median",top10Median)}{metric("Field median",fieldMedian)}</div>
+  <div style={{...card,overflow:"hidden",marginBottom:12}}>
+   <div style={{padding:"10px 12px",borderBottom:"1px solid "+border,display:"flex",justifyContent:"space-between",gap:8,alignItems:"center"}}><div><div style={{fontSize:13,fontWeight:800}}>Best {n}-lap consecutive averages</div><div style={{fontSize:10,color:muted,marginTop:2}}>{bestRuns.length} of {driverNames.length} drivers have a qualifying run</div></div><div style={{fontSize:10,color:muted}}>Fastest to slowest</div></div>
+   {bestRuns.length===0?<div style={{padding:18,fontSize:12,color:muted}}>No driver has completed a valid {n}-lap sequence in a recorded run yet.</div>:<div style={{overflowX:"auto"}}><table style={{width:"100%",borderCollapse:"collapse",fontSize:11,fontVariantNumeric:"tabular-nums"}}><thead><tr style={{color:muted,textAlign:"left",background:dark?"#172235":"#f5f7fa"}}>{["POS","DRIVER","AVG LAP","LAP RANGE","RUN"].map(x=><th key={x} style={{padding:"8px 10px",fontSize:9}}>{x}</th>)}</tr></thead><tbody>{bestRuns.map((row,i)=><tr key={row.name} style={{borderTop:"1px solid "+border,background:row.name===selectedDriver?(dark?"#173452":"#edf5ff"):"transparent"}}><td style={{padding:"8px 10px",fontWeight:800,color:i===0?"#16a34a":muted}}>{i+1}</td><td style={{padding:"8px 10px",fontWeight:750,whiteSpace:"nowrap"}}><button onClick={()=>onToggleFavorite&&onToggleFavorite(row.name)} style={{border:0,background:"transparent",padding:"0 5px 0 0",color:favorites.includes(row.name)?"#eab308":muted,cursor:"pointer"}}>{favorites.includes(row.name)?"★":"☆"}</button>{numberData[row.name]?"#"+numberData[row.name]+" ":""}{row.name}{row.name===selectedDriver?" · SELECTED":""}</td><td style={{padding:"8px 10px",fontWeight:800}}>{row.average.toFixed(3)} s</td><td style={{padding:"8px 10px",whiteSpace:"nowrap"}}>L{row.startLap}–L{row.endLap}</td><td style={{padding:"8px 10px"}}>{row.runNumber??"—"}</td></tr>)}</tbody></table></div>}
   </div>
-  <div style={{display:"flex",justifyContent:"space-between",gap:8,flexWrap:"wrap",fontSize:10,fontWeight:700,marginBottom:6}}>
-   <span>{label} · {benchmark==null?"No qualifying "+paceWindow+"-lap runs":benchmark.toFixed(3)+" sec/lap"} · {rankedWindows.length} qualified · {favorites.length} favorites</span>
-   <span style={{color:"#22c55e"}}>★ Fastest valid lap each lap</span>
-  </div>
-  <div style={{overflowX:"auto",overflowY:"auto",maxHeight:620,border:"1px solid "+border,borderRadius:8}}>
-   <table style={{borderCollapse:"separate",borderSpacing:0,fontSize:10,fontFamily:"monospace",minWidth:Math.max(640,220+shown.length*65)}}>
-    <thead><tr><th style={{position:"sticky",left:0,top:0,zIndex:3,textAlign:"left",padding:8,background:panel,color:muted,minWidth:180}}>DRIVER</th>{shown.map(l=><th key={l} onClick={()=>toggleSort(l)} title="Tap to sort by this driver's lap number" style={{position:"sticky",top:0,padding:8,background:panel,color:sortLap===l?accent:muted,cursor:"pointer",whiteSpace:"nowrap"}}>L{l}{sortLap===l?(sortDir===1?" ↑":" ↓"):" ↕"}</th>)}</tr></thead>
-    <tbody>{ordered.map(n=><tr key={n}><th style={{position:"sticky",left:0,zIndex:1,textAlign:"left",whiteSpace:"nowrap",padding:"6px 8px",background:favorites.includes(n)?(dark?"#172c43":"#eaf3ff"):n===selectedDriver?(dark?"#173452":"#e8f2ff"):panel,color:n===selectedDriver?accent:fg}}>
-      <button onClick={()=>onToggleFavorite&&onToggleFavorite(n)} aria-label={favorites.includes(n)?"Remove favorite":"Add favorite"} style={{border:0,background:"transparent",color:favorites.includes(n)?"#f5b942":muted,fontSize:16,padding:"0 6px 0 0",cursor:"pointer"}}>{favorites.includes(n)?"★":"☆"}</button>{numberData[n]?"#"+numberData[n]+" ":""}{n}{favorites.includes(n)?<span style={{fontSize:8,color:"#f5b942",marginLeft:5}}>FAV</span>:null}</th>{shown.map(l=>{const raw=rawTime(n,l),t=time(n,l),b=base(),d=t!=null&&b!=null?t-b:null,isSlow=raw!=null&&t==null,isFast=t!=null&&fastestByLap[l]?.name===n,isRunEnd=runEnds[n]?.has(l);return <td key={l} title={isSlow?"Slow lap — displayed but excluded from benchmark metrics":isRunEnd?"End of recorded on-track run":isFast?"Fastest valid time for this driver lap number":undefined} style={{padding:7,textAlign:"right",whiteSpace:"nowrap",fontWeight:isFast?800:400,color:isFast?"#22c55e":isSlow?"#d97706":view==="time"?fg:d==null?muted:d<-.15?"#22c55e":d>.15?"#ef4444":fg,background:isFast?(dark?"#14532d88":"#dcfce7"):isSlow?(dark?"#78350f33":"#ffedd5"):view==="delta"&&d!=null?(d<-.15?(dark?"#14532d55":"#dcfce7"):d>.15?(dark?"#7f1d1d55":"#fee2e2"):"transparent"):"transparent",borderRight:isRunEnd?(dark?"2px solid rgba(255,255,255,.65)":"2px solid #64748b"):undefined}}>{raw==null?"—":isSlow?raw.toFixed(3):view==="time"?raw.toFixed(3):(d>0?"+":"")+d.toFixed(3)}{isFast?" ★":""}</td>})}</tr>)}</tbody>
-   </table>
-  </div>
-  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:8}}>Favorites are grouped first. Lap headers sort drivers by their own lap count; tap again to reverse. Green stars mark the fastest valid single lap among drivers on that lap count. The benchmark uses each driver’s best valid {paceWindow}-lap consecutive average. Cell gaps compare individual laps to the field median for that same lap, not to the multi-lap average. Slow laps remain visible in amber but are excluded from benchmark calculations and fastest-lap highlights. A thin white divider in dark mode or slate divider in light mode marks the end of a recorded run. Run boundaries are inferred from pit events, cautions, or gaps in each driver's recorded lap sequence.</div>
-  </>}
+  <div style={{display:"grid",gridTemplateColumns:"repeat(3,minmax(0,1fr))",gap:8,marginBottom:14}}>{metric("Top-20 median",top20Median)}{metric("Selected driver",selected?.average??null)}{metric("Selected lap range",selected?selected.startLap+"–"+selected.endLap:null)}</div>
+  <button onClick={()=>setShowMatrix(v=>!v)} style={{width:"100%",textAlign:"left",padding:"11px 12px",border:"1px solid "+border,borderRadius:8,background:panel,color:fg,fontSize:12,fontWeight:800,cursor:"pointer"}}>{showMatrix?"Hide":"Show"} lap-by-lap matrix <span style={{float:"right",color:muted}}>{showMatrix?"−":"+"}</span></button>
+  {showMatrix&&<div style={{...card,marginTop:8,overflow:"hidden"}}><div style={{padding:10,borderBottom:"1px solid "+border,display:"flex",justifyContent:"space-between",alignItems:"center"}}><b style={{fontSize:12}}>Individual lap times</b><select value={matrixRange} onChange={e=>setMatrixRange(e.target.value)} style={{padding:6,background:panel,color:fg,border:"1px solid "+border,borderRadius:5,fontSize:10}}><option value="25">Last 25 laps</option><option value="50">Last 50 laps</option><option value="100">Last 100 laps</option><option value="all">All laps</option></select></div><div style={{overflow:"auto",maxHeight:520}}><table style={{borderCollapse:"separate",borderSpacing:0,fontSize:10,fontFamily:"monospace",whiteSpace:"nowrap"}}><thead><tr><th style={{position:"sticky",left:0,top:0,zIndex:3,padding:8,textAlign:"left",background:panel}}>DRIVER</th>{shown.map(l=><th key={l} style={{position:"sticky",top:0,padding:7,background:panel,color:muted}}>L{l}</th>)}</tr></thead><tbody>{driverNames.map(name=><tr key={name}><th style={{position:"sticky",left:0,zIndex:1,padding:7,textAlign:"left",background:panel,color:name===selectedDriver?accent:fg}}>{numberData[name]?"#"+numberData[name]+" ":""}{name}</th>{shown.map(l=>{const t=maps[name]?.get(l);return <td key={l} style={{padding:7,textAlign:"right",borderTop:"1px solid "+border,color:Number.isFinite(t)&&t>0?fg:muted}}>{Number.isFinite(t)&&t>0?t.toFixed(3):"—"}</td>})}</tr>)}</tbody></table></div></div>}
+  <div style={{fontSize:9,color:muted,lineHeight:1.5,marginTop:10}}>Run boundaries and tire-age labels depend on pit and caution data. Some boundaries may be inferred. Average MPH is intentionally omitted until the session has a verified track-length value.</div>
  </div>;
 }
 function FieldRow({ name, primary, compDrivers, dark, me, onSetPrimary, onToggleComp, sortRank, sortKey, extraW, BEST, SIM_POS, NUM, LAST_LAP_TIME }) {
