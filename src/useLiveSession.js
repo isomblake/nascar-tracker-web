@@ -52,7 +52,7 @@ function currentStint(rawLapsAsc, cautionSet = new Set(), explicitPitSet = new S
   if (!rawLapsAsc.length) return [];
   let lastBoundaryIdx = -1;
   for (let i = 0; i < rawLapsAsc.length; i++) {
-    const [lapNum, lapTime] = rawLapsAsc[i];
+    const [lapNum] = rawLapsAsc[i];
     const isPit = explicitPitSet.has(lapNum);
     const isCaution = cautionSet.has(lapNum);
     const hasLapGap = i > 0 && lapNum !== rawLapsAsc[i - 1][0] + 1;
