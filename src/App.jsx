@@ -336,16 +336,30 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
   const gapTo = (name) => {
     const competitor = displayTiming[name];
     const result = compareOfficialTiming(selected, competitor);
-    // Prefer the live elapsed-time interval from the current timing snapshot.
-    // Unlike a stale delta-to-leader field, this is the direct track interval
-    // between these two cars and advances as their lap timing is refreshed.
-    const myElapsed = Number(selected?.vehicle_elapsed_time);
-    const theirElapsed = Number(competitor?.vehicle_elapsed_time);
-    if (result?.gapSeconds != null && Number.isFinite(myElapsed) && Number.isFinite(theirElapsed)) {
-      const interval = myElapsed - theirElapsed;
-      return { label: (interval > 0 ? "+" : "") + fmt(interval, 2) + "s", value: interval, source: "vehicle-elapsed-time" };
+    if (result?.gapSeconds != null) {
+      // Position snapshots can lag the lap feed. Treat their official interval
+      // as an anchor, then add each subsequent common clean-lap delta exactly
+      // once by deriving the sum from lap numbers (no mutable accumulator).
+      const myAnchorLap = Number(selected?.laps_completed);
+      const theirAnchorLap = Number(competitor?.laps_completed);
+      let adjustment = 0;
+      let adjustedLaps = 0;
+      if (Number.isFinite(myAnchorLap) && Number.isFinite(theirAnchorLap) && myAnchorLap === theirAnchorLap) {
+        for (const lap of lapTimeHistory(name)) {
+          if (lap.lap > myAnchorLap) {
+            adjustment += lap.value;
+            adjustedLaps += 1;
+          }
+        }
+      }
+      const interval = result.gapSeconds + adjustment;
+      return {
+        label: (interval > 0 ? "+" : "") + fmt(interval, 2) + "s",
+        value: interval,
+        source: "official-anchor-plus-lap-deltas",
+        adjustedLaps
+      };
     }
-    if (result?.gapSeconds != null) return { label: (result.gapSeconds > 0 ? "+" : "") + fmt(result.gapSeconds, 2) + "s", value: result.gapSeconds, source: result.source };
     if (result?.lapDelta != null && result.lapDelta !== 0) {
       const laps = Math.abs(result.lapDelta);
       return { label: laps + " lap" + (laps === 1 ? "" : "s") + (result.lapDelta < 0 ? " behind" : " ahead"), value: result.lapDelta, source: result.source };
@@ -396,7 +410,7 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
         {metric("LAST 5 LAP AVG", fmt(displayEor[displayPrimary]?.t5), "Current stint · latest five clean laps available")}
       </div>
       <div style={{...card,padding:12,marginBottom:10}}>
-        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official interval or lap-count difference</div></div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:9}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>BATTLE WINDOW</div><div style={{fontSize:9,color:palette.muted}}>Official interval + completed lap deltas</div></div>
         {[["AHEAD",ahead],["BEHIND",behind]].map(([label,name]) => {
           const d= name ? gapTo(name) : null;
           return <div key={label} style={{display:"grid",gridTemplateColumns:"58px 1fr auto",gap:8,alignItems:"center",padding:"9px 0",borderTop:"1px solid "+palette.line}}>
