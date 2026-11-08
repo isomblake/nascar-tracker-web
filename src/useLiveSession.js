@@ -6,34 +6,18 @@
 // averages, best windows, end-of-run) are computed here on the client.
 // ═══════════════════════════════════════════════════════════════════
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from './supabaseClient';
 import { normalizePracticeGroup } from './raceMetrics';
+import { buildDriverRunAnalysis, isTireChangePitStop } from './engineeringMetrics';
 
-// Track-independent lap classification:
-// - A "pit/outlier lap" is anything significantly slower than the driver's best.
-// - Margin of 5s works across all tracks: short tracks (Martinsville ~20s best, pit ~45s),
-//   intermediates (~30s best, pit ~55s), superspeedways (~47s best, pit ~55s).
-// - Green-flag variation is typically <2s even on worn tires, so 5s is safe.
-const PIT_MARGIN_SECONDS = 5;
 const ABSOLUTE_MAX_LAP = 300;    // hard cap for obviously bad data
 const WINDOWS = [5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100];
 
 // ─── pure helpers ─────────────────────────────────────────────────
 
-// Compute the per-driver threshold above which a lap is considered a pit/outlier.
-// Uses best lap + margin. Caller can pass a pre-computed best to avoid re-scanning.
-function driverThreshold(laps, bestOverride = null) {
-  if (!laps.length) return ABSOLUTE_MAX_LAP;
-  const best = bestOverride != null
-    ? bestOverride
-    : Math.min(...laps.map(([, t]) => t).filter((t) => t > 0 && t < ABSOLUTE_MAX_LAP));
-  if (!isFinite(best) || best <= 0) return ABSOLUTE_MAX_LAP;
-  return best + PIT_MARGIN_SECONDS;
-}
-
-function cleanLaps(laps, thr) {
-  return laps.filter(([, t]) => t > 0 && t <= thr);
+function cleanLaps(laps) {
+  return laps.filter(([, t]) => t > 0 && t < ABSOLUTE_MAX_LAP);
 }
 
 function rollingAvg(laps, n) {
@@ -46,8 +30,10 @@ function bestWindow(laps, n) {
   if (laps.length < n) return null;
   let best = Infinity;
   for (let i = 0; i <= laps.length - n; i++) {
-    const sum = laps.slice(i, i + n).reduce((a, [, t]) => a + t, 0);
-    const avg = sum / n;
+    const window = laps.slice(i, i + n);
+    // Never bridge a missing lap or a removed pit/caution/slow lap.
+    if (window.some((row, j) => j > 0 && Number(row[0]) !== Number(window[j - 1][0]) + 1)) continue;
+    const avg = window.reduce((a, [, t]) => a + t, 0) / n;
     if (avg < best) best = avg;
   }
   return best === Infinity ? null : best;
@@ -60,39 +46,36 @@ function bestSingle(laps) {
   return Math.min(...candidates);
 }
 
-// Detect current stint. A stint break happens at EITHER:
-//   (a) a pit lap (this driver's time > best + 5s), OR
-//   (b) a caution lap (field-wide slowdown, passed in via cautionSet)
-// Current stint = all clean laps AFTER the most recent boundary of either type.
-// Operates on raw laps so pit laps are visible as boundaries.
-function currentStint(rawLapsAsc, thr, cautionSet = new Set()) {
+// Stints break only on explicit pit/caution evidence or a missing source lap.
+// Lap-time outliers alone are not sufficient evidence of a pit stop.
+function currentStint(rawLapsAsc, cautionSet = new Set(), explicitPitSet = new Set()) {
   if (!rawLapsAsc.length) return [];
   let lastBoundaryIdx = -1;
   for (let i = 0; i < rawLapsAsc.length; i++) {
-    const [lapNum, lapTime] = rawLapsAsc[i];
-    const isPit = lapTime > thr;
+    const [lapNum] = rawLapsAsc[i];
+    const isPit = explicitPitSet.has(lapNum);
     const isCaution = cautionSet.has(lapNum);
+    const hasLapGap = i > 0 && lapNum !== rawLapsAsc[i - 1][0] + 1;
     if (isPit || isCaution) lastBoundaryIdx = i;
+    else if (hasLapGap) lastBoundaryIdx = i - 1; // Keep the first lap after a data gap in the new stint.
   }
   const afterBoundary = rawLapsAsc.slice(lastBoundaryIdx + 1);
   // Filter out any remaining pit/caution laps (shouldn't happen, but defensive)
-  return afterBoundary.filter(([n, t]) => t > 0 && t <= thr && !cautionSet.has(n));
+  return afterBoundary.filter(([n, t]) => t > 0 && t < ABSOLUTE_MAX_LAP && !cautionSet.has(n) && !explicitPitSet.has(n));
 }
 
 // Compute BEST/EOR for one driver's laps. Excludes both personal outliers
 // (pit/spin) AND field-wide caution laps. Stint resets on EITHER boundary.
-function computeDriverStats(rawLaps, cautionSet = new Set()) {
+function computeDriverStats(rawLaps, cautionSet = new Set(), explicitPitSet = new Set()) {
   const laps = [...rawLaps].sort((a, b) => a[0] - b[0]);
 
-  // Per-driver threshold: best lap + 5s. Works at every track.
-  const bestLap = bestSingle(laps);
-  const thr = driverThreshold(laps, bestLap);
+  const bestLap = bestSingle(laps.filter(([n]) => !explicitPitSet.has(n)));
 
-  // For BEST window computation, use full-session clean laps
-  const clean = cleanLaps(laps, thr).filter(([n]) => !cautionSet.has(n));
+  // Preserve slow but valid green-flag laps; remove only verified pit/caution laps.
+  const clean = cleanLaps(laps).filter(([n]) => !cautionSet.has(n) && !explicitPitSet.has(n));
 
-  // Current stint uses RAW laps so pit/caution boundaries are visible
-  const stintAsc = currentStint(laps, thr, cautionSet);
+  // Current stint uses RAW laps so explicit pit/caution and lap-gap boundaries are visible.
+  const stintAsc = currentStint(laps, cautionSet, explicitPitSet);
 
   // BEST window (search within current stint only — since session-best is meaningless)
   const best = {};
@@ -116,9 +99,15 @@ export function useLiveSession() {
   const [session, setSession] = useState(null);
   const [drivers, setDrivers] = useState([]);         // [{driver_key, car_number, full_name, last_name, practice_group}]
   const [rawLaps, setRawLaps] = useState([]);         // [{driver_key, lap_number, lap_time}]
-  const [rawPositions, setRawPositions] = useState([]); // [{driver_key, position}]
+  const [rawPositions, setRawPositions] = useState([]); // current official vehicle timing snapshot
+  const [rawPitStops, setRawPitStops] = useState([]); // append-only pit stop events from NASCAR feed
   const [status, setStatus] = useState('connecting');
   const [error, setError] = useState(null);
+  const rawLapsRef = useRef(rawLaps);
+  const driversRef = useRef(drivers);
+  const pollInFlightRef = useRef(false);
+  useEffect(() => { rawLapsRef.current = rawLaps; }, [rawLaps]);
+  useEffect(() => { driversRef.current = drivers; }, [drivers]);
 
   // Load initial active session + its data
   const loadAll = useCallback(async () => {
@@ -160,7 +149,7 @@ export function useLiveSession() {
         let lFrom = 0;
         while (true) {
           const { data: chunk } = await supabase
-            .from('laps').select('driver_key, lap_number, lap_time')
+            .from('laps').select('driver_key, lap_number, lap_time, is_caution, is_pit')
             .eq('session_id', recentId)
             .order('lap_number', { ascending: true })
             .range(lFrom, lFrom + 999);
@@ -172,8 +161,12 @@ export function useLiveSession() {
         setRawLaps(lapsAll);
 
         const { data: pos } = await supabase
-          .from('positions').select('driver_key, position').eq('session_id', recentId);
+          .from('positions').select('*').eq('session_id', recentId);
         setRawPositions(pos || []);
+        const { data: recentPitStops } = await supabase
+          .from('race_events').select('driver_key, lap_number, details, recorded_at')
+          .eq('session_id', recentId).eq('event_type', 'pit_stop').order('lap_number', { ascending: true });
+        setRawPitStops(recentPitStops || []);
         setStatus('no_session');
         setError(null);
         return;
@@ -196,7 +189,7 @@ export function useLiveSession() {
       while (true) {
         const { data: chunk, error: lErr } = await supabase
           .from('laps')
-          .select('driver_key, lap_number, lap_time')
+          .select('driver_key, lap_number, lap_time, is_pit, is_caution')
           .eq('session_id', activeId)
           .order('lap_number', { ascending: true })
           .range(from, from + PAGE - 1);
@@ -211,9 +204,19 @@ export function useLiveSession() {
       // 4. Load positions
       const { data: pos } = await supabase
         .from('positions')
-        .select('driver_key, position')
+        .select('*')
         .eq('session_id', activeId);
       setRawPositions(pos || []);
+
+      // Pit-stop events are persisted by the polling worker; load them for live run analysis.
+      const { data: activePitStops, error: pitErr } = await supabase
+        .from('race_events')
+        .select('driver_key, lap_number, details, recorded_at')
+        .eq('session_id', activeId)
+        .eq('event_type', 'pit_stop')
+        .order('lap_number', { ascending: true });
+      if (pitErr) throw pitErr;
+      setRawPitStops(activePitStops || []);
 
       setStatus('live');
       setError(null);
@@ -242,14 +245,17 @@ export function useLiveSession() {
     const pollActiveData = async () => {
       if (!session?.id || !session?.is_active || cancelled) return;
       const sessId = session.id;
+      if (pollInFlightRef.current) return;
+      pollInFlightRef.current = true;
 
       try {
         // Fetch laps beyond a buffered floor. Using global maxLap directly would
         // strand drivers who lag behind the leader — if any driver gets lap N+1
         // written first, maxLap jumps and the query skips lap N+1 for others.
         // Re-checking the last 20 laps on every poll catches any stragglers.
-        const maxLap = rawLaps.length > 0
-          ? Math.max(...rawLaps.map((r) => r.lap_number))
+        const currentLaps = rawLapsRef.current;
+        const maxLap = currentLaps.length > 0
+          ? Math.max(...currentLaps.map((r) => Number(r.lap_number) || 0))
           : 0;
         const fetchFrom = Math.max(0, maxLap - 20);
 
@@ -260,7 +266,7 @@ export function useLiveSession() {
         while (!cancelled) {
           const { data: chunk } = await supabase
             .from('laps')
-            .select('driver_key, lap_number, lap_time')
+            .select('driver_key, lap_number, lap_time, is_pit, is_caution')
             .eq('session_id', sessId)
             .gt('lap_number', fetchFrom)
             .order('lap_number', { ascending: true })
@@ -272,23 +278,43 @@ export function useLiveSession() {
         }
         if (!cancelled && newLaps.length > 0) {
           setRawLaps((prev) => {
-            // Dedup by (driver_key, lap_number)
-            const seen = new Set(prev.map((r) => `${r.driver_key}:${r.lap_number}`));
-            const toAdd = newLaps.filter((r) => !seen.has(`${r.driver_key}:${r.lap_number}`));
-            return toAdd.length > 0 ? [...prev, ...toAdd] : prev;
+            // Merge buffered rereads, but don't trigger renders for unchanged rows.
+            const merged = new Map(prev.map((r) => [String(r.driver_key) + ':' + String(r.lap_number), r]));
+            let changed = false;
+            for (const row of newLaps) {
+              const key = String(row.driver_key) + ':' + String(row.lap_number);
+              const prior = merged.get(key);
+              if (!prior || Number(prior.lap_time) !== Number(row.lap_time) || prior.is_pit !== row.is_pit || prior.is_caution !== row.is_caution) {
+                merged.set(key, row);
+                changed = true;
+              }
+            }
+            if (!changed) return prev;
+            const next = [...merged.values()].sort((a, b) => Number(a.lap_number) - Number(b.lap_number));
+            rawLapsRef.current = next;
+            return next;
           });
         }
 
         // Positions: small table (one row per driver), just refetch it all
         const { data: pos } = await supabase
           .from('positions')
-          .select('driver_key, position')
+          .select('*')
           .eq('session_id', sessId);
         if (!cancelled && pos) setRawPositions(pos);
 
+        // Pit events are append-only and the table is small; refresh alongside live timing.
+        const { data: pitStops } = await supabase
+          .from('race_events')
+          .select('driver_key, lap_number, details, recorded_at')
+          .eq('session_id', sessId)
+          .eq('event_type', 'pit_stop')
+          .order('lap_number', { ascending: true });
+        if (!cancelled && pitStops) setRawPitStops(pitStops);
+
         // Re-fetch drivers if missing — happens when START is tapped before
         // poll-nascar's first write (fire-and-forget takes 2-5s).
-        if (drivers.length === 0) {
+        if (driversRef.current.length === 0) {
           const { data: drvs } = await supabase
             .from('drivers')
             .select('*')
@@ -305,6 +331,9 @@ export function useLiveSession() {
         if (!cancelled && sess) setSession(sess);
       } catch (e) {
         console.warn('[useLiveSession] poll error', e);
+        if (!cancelled) setError(e.message || String(e));
+      } finally {
+        pollInFlightRef.current = false;
       }
     };
 
@@ -338,7 +367,7 @@ export function useLiveSession() {
       clearInterval(dataInterval);
       clearInterval(discoveryInterval);
     };
-  }, [session?.id, session?.is_active, rawLaps, loadAll, drivers.length]);
+  }, [session?.id, session?.is_active, loadAll]);
 
 // ═══════════════════════════════════════════════════════════════════
 // Field-wide caution detection:
@@ -387,14 +416,22 @@ function detectCautionLaps(rawLaps) {
 
   // ─── derived data (matches prototype shapes) ──────────────────
   const derived = useMemo(() => {
-    // FIRST: detect field-wide caution laps (done once for whole field)
-    const cautionSet = detectCautionLaps(rawLaps);
-
-    // Group laps by driver_key
-    const byDriver = {};
+    // Canonicalize poll snapshots: one row per driver/session lap, latest recorded snapshot wins.
+    const uniqueLapRows = new Map();
     for (const row of rawLaps) {
+      const key = String(row.driver_key) + ":" + Number(row.lap_number);
+      const prior = uniqueLapRows.get(key);
+      if (!prior || String(row.recorded_at || "") >= String(prior.recorded_at || "")) uniqueLapRows.set(key, row);
+    }
+    const canonicalLaps = [...uniqueLapRows.values()].sort((a,b)=>Number(a.lap_number)-Number(b.lap_number));
+    // Detect field-wide caution laps only after duplicate snapshots are removed.
+    const cautionSet = detectCautionLaps(canonicalLaps);
+    canonicalLaps.forEach((row) => { if (row.is_caution === true) cautionSet.add(Number(row.lap_number)); });
+
+    const byDriver = {};
+    for (const row of canonicalLaps) {
       if (!byDriver[row.driver_key]) byDriver[row.driver_key] = [];
-      byDriver[row.driver_key].push([row.lap_number, parseFloat(row.lap_time)]);
+      byDriver[row.driver_key].push([Number(row.lap_number), parseFloat(row.lap_time)]);
     }
 
     const BEST = {};
@@ -407,6 +444,9 @@ function detectCautionLaps(rawLaps) {
     const STINT = {};           // per-driver: current stint laps array
     const LAST_PIT = {};        // per-driver: lap number of last pit stop (or null)
     const LAST_LAP_TIME = {};   // per-driver: most recent clean lap time (for full-field "Last" column)
+    const RUN_ANALYSIS = {};    // per-driver: separated runs with tire-age confidence
+    const TIMING = {};          // official NASCAR vehicle timing snapshot
+    const PIT_STOPS = {};       // per-driver append-only pit stop history
 
     // Stable color palette for drivers (cycled by car-number hash)
     const PALETTE = [
@@ -422,30 +462,35 @@ function detectCautionLaps(rawLaps) {
       GROUPS[dispName] = normalizePracticeGroup(d.practice_group);
 
       const rawDrv = byDriver[dkey] || [];
-      const stats = computeDriverStats(rawDrv, cautionSet);
+      const explicitPitSet = new Set(canonicalLaps
+        .filter((row) => row.driver_key === dkey && row.is_pit === true)
+        .map((row) => Number(row.lap_number)));
+      const stats = computeDriverStats(rawDrv, cautionSet, explicitPitSet);
+      const driverPitStops = rawPitStops.filter((stop) => stop.driver_key === dkey);
+      RUN_ANALYSIS[dispName] = buildDriverRunAnalysis(
+        stats.laps,
+        { cautionLaps: [...cautionSet], pitLaps: driverPitStops.filter(isTireChangePitStop).map((stop) => stop.lap_number) }
+      );
+      PIT_STOPS[dispName] = driverPitStops;
       BEST[dispName] = stats.best;
       EOR[dispName] = stats.eor;
       LAPS[dispName] = stats.laps;
       STINT[dispName] = stats.stint;
 
-      // Find last pit lap: highest lap where time exceeds pit threshold.
-      // Use best+20 (not the general +5 stint margin) so caution laps that slip
-      // through cautionSet detection don't register as pit stops. Pit stops are
-      // always 30-50s above best; caution laps are typically only 8-15s above.
-      const bestL = stats.best.best;
-      const pitThr = (bestL != null && bestL > 0) ? bestL + 20 : ABSOLUTE_MAX_LAP;
+      // Last pit lap comes from explicit lap flags or recorded pit-stop events only.
       let lastPitLap = null;
-      for (let i = stats.laps.length - 1; i >= 0; i--) {
-        const [n, t] = stats.laps[i];
-        if (t > pitThr && !cautionSet.has(n)) { lastPitLap = n; break; }
+      for (const lap of explicitPitSet) lastPitLap = Math.max(lastPitLap ?? 0, lap);
+      for (const stop of driverPitStops) {
+        const lap = Number(stop.lap_number);
+        if (Number.isInteger(lap) && lap > 0) lastPitLap = Math.max(lastPitLap ?? 0, lap);
       }
       LAST_PIT[dispName] = lastPitLap;
 
-      // Most recent clean lap time (not caution, not pit)
+      // Most recent usable lap, excluding only explicit pit/caution laps.
       let lastLapTime = null;
       for (let i = stats.laps.length - 1; i >= 0; i--) {
         const [n, t] = stats.laps[i];
-        if (t > 0 && t <= pitThr && !cautionSet.has(n)) { lastLapTime = t; break; }
+        if (t > 0 && t < ABSOLUTE_MAX_LAP && !cautionSet.has(n) && !explicitPitSet.has(n)) { lastLapTime = t; break; }
       }
       LAST_LAP_TIME[dispName] = lastLapTime;
 
@@ -454,9 +499,12 @@ function detectCautionLaps(rawLaps) {
     }
 
     for (const p of rawPositions) {
-      // Map driver_key -> full_name for SIM_POS
+      // Map driver_key -> full_name for position and official timing snapshots.
       const drv = drivers.find((x) => x.driver_key === p.driver_key);
-      if (drv) SIM_POS[drv.full_name] = p.position;
+      if (drv) {
+        SIM_POS[drv.full_name] = p.position;
+        TIMING[drv.full_name] = p;
+      }
     }
 
     const NAMES = drivers
@@ -472,8 +520,8 @@ function detectCautionLaps(rawLaps) {
       else cautionRanges.push({ start: lap, end: lap });
     }
 
-    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, NAMES, cautionSet, cautionRanges };
-  }, [drivers, rawLaps, rawPositions]);
+    return { BEST, EOR, LAPS, NUM, CLR, GROUPS, SIM_POS, STINT, LAST_PIT, LAST_LAP_TIME, RUN_ANALYSIS, TIMING, PIT_STOPS, NAMES, cautionSet, cautionRanges };
+  }, [drivers, rawLaps, rawPositions, rawPitStops]);
 
   return {
     session,
@@ -482,6 +530,7 @@ function detectCautionLaps(rawLaps) {
     drivers,
     rawLaps,
     rawPositions,
+    rawPitStops,
     ...derived,
     reload: loadAll,
   };

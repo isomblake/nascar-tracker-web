@@ -10,7 +10,7 @@ const corsHeaders = {
 // Series-specific ranges reduce unnecessary NASCAR CDN traffic.
 // Expand a series range when NASCAR introduces new race IDs.
 const SERIES = [
-  { id: 1, name: "Cup", start: 5605, end: 5650 },
+  { id: 1, name: "Cup", start: 5601, end: 5650 },
   { id: 2, name: "Xfinity", start: 5635, end: 5700 },
   { id: 3, name: "Truck", start: 5660, end: 5750 },
 ];
