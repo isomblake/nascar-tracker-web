@@ -20,17 +20,14 @@ async function fetchHistory(trackName, series = 1, forceRefresh = false, runType
 }
 
 /* ═══ CONSTANTS ═══ */
-const PIT_MARGIN = 5;            // seconds over best lap = pit/outlier
-const ABSOLUTE_MAX = 300;        // hard cap for bad data
+const ABSOLUTE_MAX = 300;        // hard cap for invalid timing records
 
 // Factory: given a cautionSet (from useLiveSession), returns an isCaution predicate
 const makeCautionCheck = (cautionSet) => (lap) => cautionSet && cautionSet.has(lap);
 
-// Per-driver threshold: best lap + PIT_MARGIN. Returns ABSOLUTE_MAX if no best known.
-const thrFor = (BEST, driver) => {
-  const b = BEST?.[driver]?.best;
-  return (b != null && b > 0) ? b + PIT_MARGIN : ABSOLUTE_MAX;
-};
+// Do not classify slow laps as pit/outliers from time alone. Explicit event flags
+// are used by the lap/run analysis; this threshold is only an invalid-data ceiling.
+const thrFor = () => ABSOLUTE_MAX;
 
 /* ═══ HELPERS ═══ */
 const sn = (n) => (n ? n.split(" ").pop() : "—");
