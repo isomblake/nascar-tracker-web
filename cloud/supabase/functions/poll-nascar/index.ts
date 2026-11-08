@@ -86,6 +86,8 @@ async function pollOnce(supabase: SupabaseClient, session: Session) {
 
   if (!lapData && !liveData) throw new Error("Both NASCAR live-feed and lap-times endpoints failed");
 
+  // Prefer lap-times.json when it contains per-driver lap histories for every session.
+  // Fall back to live-feed vehicle laps only when lap-times has no usable driver array.
   const drivers = getDrivers(lapData, liveData);
   const vehicles: any[] = liveData?.vehicles ?? liveData?.Vehicles ?? [];
   const vehicleByDriver = new Map<string, any>();
@@ -325,8 +327,16 @@ serve(async (req) => {
     }
     sessionId = session.id;
 
-    const result = await pollOnce(supabase, session as Session);
-    return new Response(JSON.stringify({ ok: true, status: "poll_complete", session_id: sessionId, ...result }), {
+    // Four snapshots per cron minute; lease remains held to prevent overlap.
+    const results: any[] = [];
+    for (let i = 0; i < 4; i++) {
+      results.push(await pollOnce(supabase, session as Session));
+      if (i < 3) await new Promise((resolve) => setTimeout(resolve, 12000));
+      const { data: latest } = await supabase.from("sessions").select("is_active").eq("id", sessionId).maybeSingle();
+      if (latest && !latest.is_active) break;
+    }
+    const result = results[results.length - 1] ?? {};
+    return new Response(JSON.stringify({ ok: true, status: "poll_complete", session_id: sessionId, polls_completed: results.length, ...result }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
