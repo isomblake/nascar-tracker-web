@@ -152,18 +152,11 @@ export function isTireChangePitStop(stop) {
 export function buildDriverRunAnalysis(laps, options = {}) {
   const cautionLaps = toSet(options.cautionLaps);
   const explicitPitLaps = toSet(options.pitLaps);
-  const validTimes = (laps || []).map((row) => Number(row?.[1])).filter((time) => Number.isFinite(time) && time > 0 && time < 300);
-  const best = validTimes.length ? Math.min(...validTimes) : null;
   const hasVerifiedTireChanges = explicitPitLaps.size > 0;
+  // Never infer a pit stop from lap-time delta alone: traffic, cooldown laps,
+  // spins and changing track conditions can all produce legitimate slow laps.
   const inferredPitLaps = new Set();
-  if (best != null) {
-    for (const row of laps || []) {
-      const lap = Number(row?.[0]);
-      const time = Number(row?.[1]);
-      if (Number.isInteger(lap) && time > best + 20 && !cautionLaps.has(lap) && !explicitPitLaps.has(lap)) inferredPitLaps.add(lap);
-    }
-  }
-  const pitLaps = new Set([...explicitPitLaps, ...inferredPitLaps]);
+  const pitLaps = new Set(explicitPitLaps);
   const runs = splitLapsIntoRuns(laps, { pitLaps: [...pitLaps], cautionLaps: [...cautionLaps] });
   return {
     runs: runs.map((run) => ({
