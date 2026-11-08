@@ -102,7 +102,7 @@ export default function PracticeRunDashboard({
       <div style={{ marginBottom: 12 }}>
         <div style={{ fontSize: 18, fontWeight: 850 }}>Practice run analysis</div>
         <div style={{ fontSize: 11, color: colors.muted, lineHeight: 1.5, marginTop: 4 }}>
-          Every row is one continuous run. Runs end at a missing source lap, a caution lap, or a recorded tire-change pit lap. Slow laps alone do not create a new run.
+          Every row is one continuous run. Runs end at a missing source lap, a caution lap, or a recorded pit lap. Slow laps alone do not create a new run.
         </div>
       </div>
 
@@ -170,7 +170,7 @@ export default function PracticeRunDashboard({
                   <tr key={run.name + "-" + run.runNumber} onClick={() => onSelectDriver && onSelectDriver(run.name)} style={{ borderTop: "1px solid " + colors.border, background: run.name === selectedDriver ? (dark ? "#173452" : "#edf5ff") : "transparent", cursor: onSelectDriver ? "pointer" : "default" }}>
                     <td style={{ padding: "9px 8px", textAlign: "left", whiteSpace: "nowrap" }}>
                       <div style={{ fontWeight: 800, color: run.name === selectedDriver ? colors.accent : colors.text }}>#{run.number} {run.name}</div>
-                      <div style={{ color: colors.muted, fontSize: 9, marginTop: 2 }}>Run {run.runNumber} · L{run.startLap}–L{run.endLap} · {run.tireAgeConfidence === "higher" ? "pit recorded" : "run boundary estimated"}</div>
+                      <div style={{ color: colors.muted, fontSize: 9, marginTop: 2 }}>Run {run.runNumber} · L{run.startLap}–L{run.endLap}</div>
                     </td>
                     <td style={{ padding: "9px 8px", textAlign: "right", fontWeight: 800 }}>{run.laps}</td>
                     <td style={{ padding: "9px 8px", textAlign: "right", fontWeight: 800 }}>{fmt(run.average)}</td>
@@ -186,7 +186,7 @@ export default function PracticeRunDashboard({
       </div>
 
       <div style={{ fontSize: 9, color: colors.muted, lineHeight: 1.5, marginTop: 10 }}>
-        STD DEV measures lap-time variation within that run. First 5 → Last 5 is the change in average lap time; positive means the final five were slower. Run age is an estimate unless an official tire-change pit event confirms the boundary. Averages from runs of different lengths are not perfectly comparable, so use the run-length filter before comparing pace.
+        STD DEV measures lap-time variation within that run. First 5 → Last 5 is the change in average lap time; positive means the final five were slower. Run age should be treated as estimated unless event data explicitly confirms a tire change. Averages from runs of different lengths are not perfectly comparable, so use the run-length filter before comparing pace.
       </div>
     </div>
   );
