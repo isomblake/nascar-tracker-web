@@ -342,6 +342,19 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
     }
     return null;
   };
+  const lapTimeHistory = (name) => {
+    if (!name || demoMode) return [];
+    const myLaps = new Map((LAPS[displayPrimary] || []).map(([lap, time]) => [Number(lap), Number(time)]));
+    const theirLaps = new Map((LAPS[name] || []).map(([lap, time]) => [Number(lap), Number(time)]));
+    const myThreshold = thrFor(BEST, displayPrimary);
+    const theirThreshold = thrFor(BEST, name);
+    return [...myLaps.keys()].filter(lap => theirLaps.has(lap)).sort((a,b) => a-b)
+      .filter(lap => {
+        const mine = myLaps.get(lap), theirs = theirLaps.get(lap);
+        return !isCaution?.(lap) && mine > 0 && theirs > 0 && mine <= myThreshold && theirs <= theirThreshold;
+      })
+      .map(lap => ({ lap, value: myLaps.get(lap) - theirLaps.get(lap) }));
+  };
   const lapTimeDelta = (name) => {
     if (!name) return null;
     if (demoMode) {
@@ -408,6 +421,24 @@ function RaceCommandCockpit({ session, NAMES, NUM, SIM_POS, TIMING, LAST_LAP_TIM
             </div>
           </div>;
         })}
+        {!demoMode && <div style={{marginTop:8,borderTop:"1px solid "+palette.line,paddingTop:8}}>
+          <div style={{fontSize:9,fontWeight:900,letterSpacing:1,color:palette.muted,marginBottom:6}}>LAP-BY-LAP PACE DELTA · SELECTED DRIVER</div>
+          <div style={{display:"grid",gridTemplateColumns:"48px 1fr 1fr",gap:6,padding:"5px 7px",background:palette.panel2,fontSize:8,fontWeight:900,color:palette.muted}}>
+            <span>LAP</span><span style={{textAlign:"right"}}>VS AHEAD</span><span style={{textAlign:"right"}}>VS BEHIND</span>
+          </div>
+          {(() => {
+            const aheadRows = lapTimeHistory(ahead), behindRows = lapTimeHistory(behind);
+            const byLap = new Map(aheadRows.map(row => [row.lap, { lap: row.lap, ahead: row.value, behind: null }]));
+            behindRows.forEach(row => { const current = byLap.get(row.lap) || { lap: row.lap, ahead: null, behind: null }; current.behind = row.value; byLap.set(row.lap, current); });
+            const rows = [...byLap.values()].sort((a,b) => b.lap-a.lap).slice(0,15);
+            return rows.length ? rows.map(row => <div key={row.lap} style={{display:"grid",gridTemplateColumns:"48px 1fr 1fr",gap:6,padding:"6px 7px",borderBottom:"1px solid "+palette.line,fontSize:10,...mono}}>
+              <span style={{color:palette.muted}}>L{row.lap}</span>
+              <span style={{textAlign:"right",fontWeight:800,color:row.ahead==null?palette.muted:row.ahead>0?palette.red:palette.green}}>{row.ahead==null?"—":(row.ahead>0?"+":"")+row.ahead.toFixed(3)+"s"}</span>
+              <span style={{textAlign:"right",fontWeight:800,color:row.behind==null?palette.muted:row.behind>0?palette.red:palette.green}}>{row.behind==null?"—":(row.behind>0?"+":"")+row.behind.toFixed(3)+"s"}</span>
+            </div>) : <div style={{padding:8,fontSize:9,color:palette.muted}}>No matched clean laps available for both adjacent cars yet.</div>;
+          })()}
+          <div style={{fontSize:8,color:palette.muted,marginTop:6}}>Positive = selected driver slower · Negative = selected driver faster · same lap number, clean laps only · latest 15 shown</div>
+        </div>}
       </div>
       <div style={{...card,overflow:"hidden"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px 10px"}}><div style={{fontSize:11,fontWeight:900,letterSpacing:1.1}}>LIVE TIMING TOWER</div><div style={{fontSize:9,color:palette.muted}}>TOP 12 + SELECTED DRIVER</div></div>
