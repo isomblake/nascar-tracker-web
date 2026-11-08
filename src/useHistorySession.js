@@ -52,7 +52,9 @@ function currentStint(rawLapsAsc, cautionSet = new Set(), explicitPitSet = new S
   let lastBoundaryIdx = -1;
   for (let i = 0; i < rawLapsAsc.length; i++) {
     const [lapNum] = rawLapsAsc[i];
+    const hasGap = i > 0 && lapNum !== rawLapsAsc[i - 1][0] + 1;
     if (explicitPitSet.has(lapNum) || cautionSet.has(lapNum)) lastBoundaryIdx = i;
+    else if (hasGap) lastBoundaryIdx = i - 1;
   }
   return rawLapsAsc
     .slice(lastBoundaryIdx + 1)
