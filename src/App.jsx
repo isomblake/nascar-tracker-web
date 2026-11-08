@@ -6,7 +6,7 @@ import PracticeRunDashboard from "./PracticeRunDashboard";
 import SessionControl from "./SessionControl";
 import { supabase } from "./supabaseClient";
 import { compareRaceLaps } from "./raceMetrics";
-import { compareRunsByTireAge, summarizeRun, compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap, estimatePaceDeficitPerLap, getPitStopTireCount } from "./engineeringMetrics";
+import { compareOfficialTiming, compareLapByLap, formatOfficialLeaderGap, estimatePaceDeficitPerLap, getPitStopTireCount } from "./engineeringMetrics";
 
 /* ═══ HISTORY FETCH ═══ */
 async function fetchHistory(trackName, series = 1, forceRefresh = false, runType = 3) {
@@ -183,55 +183,6 @@ function FalloffCard({ primary, compDrivers, dark, BEST, EOR, NUM }) {
             ];
           })}
         </div>
-      </div>
-    </div>
-  );
-}
-
-function PracticeCompCard({ name, primary, dark, BEST, EOR, NUM, GROUPS, extraWindow }) {
-  const bdr = dark ? "#1e1e3a" : "#e0e0e0";
-  const card = dark ? "#10102a" : "#fff";
-  const sub = dark ? "#555" : "#999";
-
-  if (!name || !BEST[name]) return null;
-  const pb = BEST[primary] || {};
-  const pe = EOR[primary] || {};
-  const tb = BEST[name] || {};
-  const te = EOR[name] || {};
-
-  return (
-    <div style={{ padding: 14, marginBottom: 10, background: card, border: `1px solid ${bdr}`, borderRadius: 10 }}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
-        <div style={{ fontSize: 14, fontWeight: 700 }}>#{NUM[name] || "?"} {name}</div>
-        <div style={{ fontSize: 10, color: sub }}>G{GROUPS[name] || "?"} · {BEST[name].tl || 0} laps</div>
-      </div>
-      <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>BEST WINDOW (lower = faster)</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, marginBottom: 10 }}>
-        {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => {
-          const diff = pb[k] != null && tb[k] != null ? pb[k] - tb[k] : null;
-          const c = diff == null ? sub : diff > 0 ? "#22c55e" : "#ef4444";
-          return (
-            <div key={k} style={{ textAlign: "center", padding: "5px 0", background: dark ? "#ffffff06" : "#00000006", borderRadius: 4 }}>
-              <div style={{ fontSize: 9, color: sub, fontWeight: 700 }}>{k.replace("t", "")}L</div>
-              <div style={{ fontSize: 12, fontWeight: 600, ...MF }}>{ft(tb[k])}</div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: c, ...MF }}>{diff != null ? (diff > 0 ? "+" : "") + diff.toFixed(3) : "—"}</div>
-            </div>
-          );
-        })}
-      </div>
-      <div style={{ fontSize: 9, color: sub, fontWeight: 700, marginBottom: 4 }}>END OF RUN (worn tires)</div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
-        {["t5", "t10", "t15", "t20", "t25", extraWindow ? "t" + extraWindow : "t30"].map((k) => {
-          const diff = pe[k] != null && te[k] != null ? pe[k] - te[k] : null;
-          const c = diff == null ? sub : diff > 0 ? "#22c55e" : "#ef4444";
-          return (
-            <div key={k + "e"} style={{ textAlign: "center", padding: "5px 0", background: dark ? "#ffffff06" : "#00000006", borderRadius: 4 }}>
-              <div style={{ fontSize: 9, color: sub, fontWeight: 700 }}>{k.replace("t", "")}L</div>
-              <div style={{ fontSize: 12, fontWeight: 600, ...MF }}>{ft(te[k])}</div>
-              <div style={{ fontSize: 10, fontWeight: 700, color: c, ...MF }}>{diff != null ? (diff > 0 ? "+" : "") + diff.toFixed(3) : "—"}</div>
-            </div>
-          );
-        })}
       </div>
     </div>
   );
@@ -523,16 +474,6 @@ export default function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [pView, setPView] = useState("dashboard");
   const [practiceLapFavorites, setPracticeLapFavorites] = useState([]);
-  const [pGroup, setPGroup] = useState(0);
-  const [practiceCompareDriver, setPracticeCompareDriver] = useState("");
-  const [practicePrimaryRunIndex, setPracticePrimaryRunIndex] = useState(0);
-  const [practiceCompareRunIndex, setPracticeCompareRunIndex] = useState(0);
-  useEffect(() => {
-    setPGroup(0);
-    setPracticePrimaryRunIndex(0);
-    setPracticeCompareRunIndex(0);
-    setPracticeCompareDriver("");
-  }, [session?.id, practHistSessionId]);
   const [cDrivers, setCDrivers] = useState(new Set(["Brad Keselowski"]));
   const [fieldSort, setFieldSort] = useState("pos");
   const [compMode, setCompMode] = useState("last");
@@ -1337,7 +1278,6 @@ export default function App() {
       {mode === "practice" && (() => {
         const usingPH = practHistSessionId != null && practHist.NAMES?.length > 0;
         const pB = usingPH ? practHist.BEST : BEST;
-        const pE = usingPH ? practHist.EOR : EOR;
         const pL = usingPH ? practHist.LAPS : LAPS;
         const pG = usingPH ? practHist.GROUPS : GROUPS;
         const pN = usingPH ? practHist.NUM : NUM;
@@ -1346,46 +1286,7 @@ export default function App() {
         const pRUN = usingPH ? practHist.RUN_ANALYSIS : RUN_ANALYSIS;
         const pPri = pNA.includes(primaryResolved) ? primaryResolved : (pNA[0] || primaryResolved);
 
-        // Practice rankings must cover the whole session, not only the latest stint.
-        // End-of-run pace is taken from each driver's longest clean run.
-        const practiceWindows = [5, 10, 15, 20, 25, 30, 35, 40, 50, 75, 100];
-        const practiceBest = {};
-        const practiceEnd = {};
-        for (const name of pNA) {
-          const runs = pRUN?.[name]?.runs || [];
-          const best = { ...(pB[name] || {}) };
-          const end = { ...(pE[name] || {}) };
-          const longestRun = [...runs].sort((a, b) => b.laps.length - a.laps.length)[0] || null;
-          for (const windowSize of practiceWindows) {
-            let bestAverage = Infinity;
-            for (const run of runs) {
-              const times = run.laps.map((lap) => Number(lap.time)).filter((time) => Number.isFinite(time) && time > 0);
-              for (let i = 0; i <= times.length - windowSize; i++) {
-                const average = times.slice(i, i + windowSize).reduce((sum, time) => sum + time, 0) / windowSize;
-                if (average < bestAverage) bestAverage = average;
-              }
-            }
-            best[`t${windowSize}`] = bestAverage === Infinity ? null : bestAverage;
-            const longestTimes = longestRun ? longestRun.laps.map((lap) => Number(lap.time)) : [];
-            const finalWindow = longestTimes.slice(-windowSize);
-            end[`t${windowSize}`] = finalWindow.length === windowSize
-              ? finalWindow.reduce((sum, time) => sum + time, 0) / windowSize
-              : null;
-          }
-          practiceBest[name] = best;
-          practiceEnd[name] = end;
-        }
-        const primaryRuns = pRUN?.[pPri]?.runs || [];
-        const compareCandidates = pNA.filter((name) => name !== pPri && (pRUN?.[name]?.runs || []).length > 0);
-        const compareName = compareCandidates.includes(practiceCompareDriver)
-          ? practiceCompareDriver
-          : (compDrivers.find((name) => compareCandidates.includes(name)) || compareCandidates[0] || "");
-        const compareRuns = compareName ? (pRUN?.[compareName]?.runs || []) : [];
-        const primaryRun = primaryRuns[practicePrimaryRunIndex] || primaryRuns[primaryRuns.length - 1] || null;
-        const compareRun = compareRuns[practiceCompareRunIndex] || compareRuns[compareRuns.length - 1] || null;
-        const runComparison = primaryRun && compareRun ? compareRunsByTireAge(primaryRun, compareRun) : null;
-        const primaryRunSummary = primaryRun?.summary || summarizeRun(primaryRun);
-        const pSess = usingPH ? practHist.session : session;
+                const pSess = usingPH ? practHist.session : session;
 
         // Chart data computed from the active practice source (historical or live)
         const pChartData = (() => {
