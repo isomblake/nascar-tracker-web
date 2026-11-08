@@ -178,16 +178,25 @@ export function formatOfficialLeaderGap(driver, leader) {
   const lapDifference = Number.isFinite(driverLaps) && Number.isFinite(leaderLaps)
     ? leaderLaps - driverLaps : null;
 
-  // Lapped cars get a lap deficit, not a misleading cumulative elapsed-time subtraction.
-  if (lapDifference > 0) {
+  const delta = Number(driver.delta_leader);
+  const hasOfficialSeconds = driver.delta_leader != null && Number.isFinite(delta) && delta >= 0;
+  // Cars cross the timing line at different moments. A one-lap completed-count
+  // difference with a sub-lap official interval is a transient, not a real deficit.
+  const referenceLapTime = Number(leader.last_lap_time) > 0
+    ? Number(leader.last_lap_time)
+    : Number(driver.last_lap_time);
+  const isCrossingLineTransient = lapDifference === 1 &&
+    hasOfficialSeconds && referenceLapTime > 0 &&
+    delta < referenceLapTime * 0.75;
+
+  if (lapDifference > 0 && !isCrossingLineTransient) {
     return { label: `${lapDifference} lap${lapDifference === 1 ? "" : "s"} down`, type: "laps", value: lapDifference, timeGapSeconds: null };
   }
   if (lapDifference < 0) {
     const lapsAhead = Math.abs(lapDifference);
     return { label: `${lapsAhead} lap${lapsAhead === 1 ? "" : "s"} ahead`, type: "laps", value: lapDifference, timeGapSeconds: null };
   }
-  const delta = Number(driver.delta_leader);
-  if (driver.delta_leader == null || !Number.isFinite(delta) || delta < 0) return null;
+  if (!hasOfficialSeconds) return null;
   return delta === 0
     ? { label: "LEADER", type: "leader", value: 0, timeGapSeconds: 0 }
     : { label: `${delta.toFixed(2)}s`, type: "seconds", value: delta, timeGapSeconds: delta };
